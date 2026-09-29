@@ -1,57 +1,47 @@
-# 🎮 Romarr
+# Romarr
 
-**Romarr** is a Radarr / Sonarr-style automated collection manager for video game ROMs and ISO disc images. It integrates with **Prowlarr** / **Torznab** indexers and download clients (like **qBittorrent**), and automatically sorts, unpacks, and organizes downloaded games into native folder structures for **Batocera**, **RetroPie**, **Recalbox**, or **ES-DE**.
+Romarr is an automated video game ROM and ISO collection manager inspired by Radarr and Sonarr. It integrates with Prowlarr/Torznab indexers and download clients (such as qBittorrent) to search, download, extract, and automatically organize retro and modern games into destination folders compatible with Batocera, RetroPie, Recalbox, and ES-DE.
 
----
+## Features
 
-## ✨ Features
+- **Web Interface**: Manage your game library, browse metadata, view cover art, and monitor active downloads.
+- **Indexer Integration**: Query Prowlarr/Torznab indexers for releases with seeders, file size, format detection, and one-click grab.
+- **Region Parsing & Prioritization**: Automatically classify releases by region (USA/NTSC-U, Europe/PAL, Japan/NTSC-J, World, and fan translation patches) and apply custom priority order.
+- **Automated Organization & Extraction**: Move completed downloads to emulator-ready paths with support for `.zip`, `.7z`, and `.rar` unpacking and preferred formats (`.chd`, `.rvz`, `.iso`, etc.).
+- **Target OS Compatibility**: Folder structures configurable for Batocera (`/userdata/roms/<system>/`), RetroPie (`/home/pi/RetroPie/roms/<system>/`), Recalbox, and ES-DE.
+- **Download Monitoring**: Track progress, download speeds, ETA, and post-processing queue in real time.
 
-- 🔍 **Radarr / Sonarr-Style Web UI**: Search for games with rich cover art, screenshots, release years, developers, genres, and platform filters.
-- 🌍 **Region Sorting & Filtering**:
-  - Filter releases directly by **USA / North America (NTSC-U)**, **Europe (PAL)**, **Japan (NTSC-J)**, **World / Global**, or **English Fan Translations (`[T-En]`)**.
-  - Customizable **Region Priority Hierarchy** in Settings (e.g., automatically prefer USA releases over Europe and Japan).
-- 📦 **Prowlarr & Torznab Indexer Support**: Live interactive release search with seeder count, file size, quality format (`.chd`, `.rvz`, `.iso`, `.nsp`, `.zip`), and 1-click grabbing.
-- 🕹️ **Batocera & RetroPie Native Organization**:
-  - Automatically moves and renames ROMs into clean directories:
-    - Batocera: `/userdata/roms/<system>/` (e.g. `snes`, `psx`, `ps2`, `n64`, `gamecube`, `switch`, `megadrive`)
-    - RetroPie: `/home/pi/RetroPie/roms/<system>/` (e.g. `snes`, `psx`, `ps2`, `gc`, `wii`)
-  - Auto-extracts `.zip`, `.7z`, and `.rar` archives when appropriate, keeping optimal formats like `.chd` (PS1/PS2/Dreamcast/Saturn) and `.rvz` (GameCube/Wii).
-- ⚡ **Background Queue & Download Monitor**: Live download speed, progress bar, ETA, and automatic post-processing upon completion.
-- 🐳 **Dockerized Deployment**: Single-container build or unified `docker-compose.yml` with Prowlarr and qBittorrent included.
+## Quick Start (Docker Compose)
 
----
-
-## 🚀 Quick Start with Docker Compose
-
-1. Clone or navigate to the repository:
+1. Clone repository:
    ```bash
-   cd Romarr_Redo
+   git clone https://github.com/CalvinistKlein/romarr.git
+   cd romarr
    ```
 
-2. Start Romarr along with Prowlarr and qBittorrent:
+2. Start service:
    ```bash
    docker compose up -d
    ```
 
-3. Access the web dashboards:
-   - **Romarr UI**: [http://localhost:8000](http://localhost:8000)
-   - **Prowlarr**: [http://localhost:9696](http://localhost:9696)
-   - **qBittorrent**: [http://localhost:8080](http://localhost:8080) *(Default user/pass: `admin` / `adminadmin`)*
+3. Access dashboards:
+   - Romarr Web UI: `http://localhost:8000`
 
----
+### Volume Mounts
 
-## 📁 Directory Structure & Volume Mounts
+| Host Path | Container Path | Purpose |
+| --- | --- | --- |
+| `./config` | `/app/data` | Persistent SQLite database (`romarr.db`) and settings |
+| `./roms` | `/roms` | Organized ROM target library |
+| `./downloads` | `/downloads` | Shared download directory from download client |
 
-In `docker-compose.yml`:
-- `./roms:/roms` ➔ Mount to your Batocera or RetroPie ROMs storage.
-- `./downloads:/downloads` ➔ Shared download directory where qBittorrent saves files.
-- `./config:/app/data` ➔ Persistent database (`romarr.db`) and user settings.
+## Local Development
 
----
+### Prerequisites
+- Python 3.11+
+- Node.js 20+ and npm
 
-## 🛠️ Local Development
-
-### 1. Backend (FastAPI + SQLite)
+### Backend Setup
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -59,20 +49,26 @@ pip install -r backend/requirements.txt
 uvicorn backend.app.main:app --reload --port 8000
 ```
 
-### 2. Frontend (React + Vite + Tailwind CSS)
+### Frontend Setup
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open `http://localhost:5173` in your browser.
 
----
+## Configuration
 
-## ⚙️ Configuration & Region Preferences
+Navigate to **Settings** in the Romarr UI to configure:
+1. **Prowlarr Integration**: Prowlarr URL and API key for indexer queries.
+2. **Download Client**: qBittorrent Web UI URL, username, and password.
+3. **Region Hierarchy**: Drag or reorder preferred regions (USA, EUR, JPN, WORLD, Translation).
+4. **Target Structure**: Destination folder conventions (Batocera, RetroPie, Recalbox, ES-DE).
 
-In **Romarr Settings**:
-1. **Prowlarr Integration**: Enter your Prowlarr URL (e.g., `http://prowlarr:9696`) and API Key.
-2. **Download Client**: Set qBittorrent Web UI URL and credentials.
-3. **Region Priority**: Reorder your preferred regions (`USA`, `EUR`, `JPN`, `WORLD`, `TRANSLATION`) using the **Move Up / Move Down** controls.
-4. **Target Structure**: Choose between **Batocera**, **RetroPie**, **Recalbox**, or **ES-DE**.
+## AI Attribution
+
+This project was developed with the assistance of AI tools (including Anthropic and Google DeepMind models) for code generation, architecture design, and documentation.
+
+## License
+
+MIT License.
