@@ -1,0 +1,23 @@
+services:
+  romarr:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - DATA_DIR=/app/data
+      - ROMS_DIR=/roms
+      - DOWNLOADS_DIR=/downloads
+      - OS_STRUCTURE=batocera # Options: batocera, retropie, recalbox, es-de
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config:/app/data
+      - ./roms:/roms                 # Mount to your Batocera/RetroPie ROMs drive (e.g. /media/batocera/roms)
+      - ./downloads:/downloads       # Shared download folder with your existing qBittorrent
