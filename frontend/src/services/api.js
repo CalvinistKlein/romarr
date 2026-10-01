@@ -96,6 +96,27 @@ export const api = {
     return handleResponse(res);
   },
 
+  updateGame: async (id, gameData) => {
+    await ensureApiKey();
+    const res = await fetch(`${API_BASE}/games/${id}`, {
+      method: 'PUT',
+      headers: buildHeaders(),
+      body: JSON.stringify(gameData),
+    });
+    return handleResponse(res);
+  },
+
+  getCoverOptions: async (id, query = '') => {
+    await ensureApiKey();
+    const params = new URLSearchParams();
+    if (query) params.append('query', query);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await fetch(`${API_BASE}/games/${id}/cover-options${qs}`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
+    return handleResponse(res);
+  },
+
   deleteGame: async (id) => {
     await ensureApiKey();
     const res = await fetch(`${API_BASE}/games/${id}`, {
@@ -201,6 +222,15 @@ export const api = {
     return handleResponse(res);
   },
 
+  testIGDB: async () => {
+    await ensureApiKey();
+    const res = await fetch(`${API_BASE}/settings/test-igdb`, {
+      method: 'POST',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
+    return handleResponse(res);
+  },
+
   getSystemStatus: async () => {
     await ensureApiKey();
     const res = await fetch(`${API_BASE}/settings/system-status`, {
@@ -227,16 +257,85 @@ export const api = {
     return handleResponse(res);
   },
 
-  uploadRoms: async (formData) => {
+  uploadRoms: async (formData, onProgress) => {
     await ensureApiKey();
     const key = getApiKey();
-    const headers = {};
-    if (key) headers['X-Api-Key'] = key;
 
-    const res = await fetch(`${API_BASE}/import/upload`, {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/import/upload`);
+
+      if (key) {
+        xhr.setRequestHeader('X-Api-Key', key);
+      }
+
+      let startTime = Date.now();
+      let lastLoaded = 0;
+      let lastTime = startTime;
+      let currentSpeed = 0;
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const now = Date.now();
+            const elapsed = (now - lastTime) / 1000;
+            if (elapsed > 0.25) {
+              currentSpeed = (event.loaded - lastLoaded) / elapsed;
+              lastLoaded = event.loaded;
+              lastTime = now;
+            }
+            const percent = Math.min(100, Math.round((event.loaded * 100) / event.total));
+            const remainingBytes = event.total - event.loaded;
+            const eta = currentSpeed > 0 ? Math.round(remainingBytes / currentSpeed) : 0;
+
+            onProgress({
+              loaded: event.loaded,
+              total: event.total,
+              percent,
+              speed: currentSpeed,
+              eta,
+              state: percent >= 100 ? 'processing' : 'uploading'
+            });
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch (e) {
+            resolve({ success: true, message: xhr.responseText });
+          }
+        } else {
+          let detail = `HTTP ${xhr.status}`;
+          try {
+            const data = JSON.parse(xhr.responseText);
+            detail = data.detail || data.message || detail;
+          } catch (_) {}
+          reject(new Error(detail));
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error occurred during ROM upload.'));
+      };
+
+      xhr.onabort = () => {
+        reject(new Error('Upload aborted by user.'));
+      };
+
+      xhr.send(formData);
+    });
+  },
+
+  scanFolder: async (scanData) => {
+    await ensureApiKey();
+    const res = await fetch(`${API_BASE}/import/scan`, {
       method: 'POST',
-      headers,
-      body: formData,
+      headers: buildHeaders(),
+      body: JSON.stringify(scanData),
     });
     return handleResponse(res);
   },
@@ -260,3 +359,4 @@ export const api = {
     document.body.removeChild(link);
   },
 };
+

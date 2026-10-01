@@ -1,6 +1,7 @@
 """
 Game Metadata Service.
 Integrates with IGDB (Twitch API) and includes a rich fallback provider for instant search.
+Supports comprehensive cover art, artwork, and screenshot re-searching.
 """
 
 import httpx
@@ -23,6 +24,18 @@ class GameSearchResult(BaseModel):
     developer: Optional[str] = None
     publisher: Optional[str] = None
     genres: List[str] = []
+
+class CoverOption(BaseModel):
+    id: str
+    url: str
+    url_hd: str
+    thumbnail_url: str
+    type: str  # "cover", "artwork", "screenshot", "edition_cover"
+    label: str
+    width: Optional[int] = None
+    height: Optional[int] = None
+    platforms: List[str] = []
+    release_year: Optional[int] = None
 
 class IGDBClient:
     def __init__(self, client_id: str = "", client_secret: str = ""):
@@ -62,15 +75,15 @@ class IGDBClient:
         if not token:
             return []
 
-        # Find IGDB platform ID if platform specified
         platform_filter = ""
         if platform_id and platform_id in PLATFORMS:
             p_info = PLATFORMS[platform_id]
             if p_info.igdb_id:
                 platform_filter = f" & platforms = ({p_info.igdb_id})"
 
+        clean_query = query.replace('"', '\\"')
         body = f"""
-        search "{query}";
+        search "{clean_query}";
         fields name, slug, summary, cover.image_id, screenshots.image_id, first_release_date, genres.name, platforms.name, platforms.id, involved_companies.company.name, involved_companies.developer, involved_companies.publisher;
         where category = (0, 8, 9, 10){platform_filter};
         limit {limit};
@@ -89,25 +102,20 @@ class IGDBClient:
                     data = res.json()
                     results = []
                     for item in data:
-                        # Extract cover
                         cover_url = None
                         if "cover" in item and "image_id" in item["cover"]:
                             cover_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{item['cover']['image_id']}.jpg"
                         
-                        # Extract banner / screenshot
                         banner_url = None
                         if "screenshots" in item and len(item["screenshots"]) > 0:
                             banner_url = f"https://images.igdb.com/igdb/image/upload/t_1080p/{item['screenshots'][0]['image_id']}.jpg"
 
-                        # Extract release year
                         release_year = None
                         if "first_release_date" in item:
                             release_year = time.gmtime(item["first_release_date"]).tm_year
 
-                        # Extract genres
                         genres = [g["name"] for g in item.get("genres", [])]
 
-                        # Extract developer & publisher
                         developer = None
                         publisher = None
                         for comp in item.get("involved_companies", []):
@@ -117,10 +125,8 @@ class IGDBClient:
                             if comp.get("publisher") and not publisher:
                                 publisher = c_name
 
-                        # Handle platforms
                         for p in item.get("platforms", []):
                             p_igdb_id = p.get("id")
-                            # Map IGDB platform id to our platform_id
                             matched_platform_id = "other"
                             matched_platform_name = p.get("name", "Unknown")
                             for k, v in PLATFORMS.items():
@@ -150,6 +156,149 @@ class IGDBClient:
             except Exception as e:
                 print(f"[IGDB] Search query error: {e}")
         return []
+
+    async def get_cover_options(
+        self,
+        query: str,
+        igdb_id: Optional[int] = None,
+        platform_id: Optional[str] = None
+    ) -> List[CoverOption]:
+        """Search and collect all available cover art, artworks, and screenshots from IGDB."""
+        token = await self.get_token()
+        if not token:
+            return []
+
+        headers = {
+            "Client-ID": self.client_id,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json"
+        }
+
+        options: List[CoverOption] = []
+        seen_image_ids = set()
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # 1. If igdb_id is known, query specific covers and artworks for this game
+            if igdb_id:
+                try:
+                    c_body = f"fields image_id, width, height, alpha_channel; where game = {igdb_id}; limit 20;"
+                    c_res = await client.post("https://api.igdb.com/v4/covers", headers=headers, content=c_body)
+                    if c_res.status_code == 200:
+                        for idx, c in enumerate(c_res.json()):
+                            img_id = c.get("image_id")
+                            if img_id and img_id not in seen_image_ids:
+                                seen_image_ids.add(img_id)
+                                options.append(CoverOption(
+                                    id=f"cover_{img_id}",
+                                    url=f"https://images.igdb.com/igdb/image/upload/t_cover_big/{img_id}.jpg",
+                                    url_hd=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                    thumbnail_url=f"https://images.igdb.com/igdb/image/upload/t_cover_small/{img_id}.jpg",
+                                    type="cover",
+                                    label=f"Official Cover #{idx+1}",
+                                    width=c.get("width"),
+                                    height=c.get("height")
+                                ))
+                except Exception as e:
+                    print(f"[IGDB] Specific covers fetch error: {e}")
+
+                try:
+                    a_body = f"fields image_id, width, height; where game = {igdb_id}; limit 20;"
+                    a_res = await client.post("https://api.igdb.com/v4/artworks", headers=headers, content=a_body)
+                    if a_res.status_code == 200:
+                        for idx, a in enumerate(a_res.json()):
+                            img_id = a.get("image_id")
+                            if img_id and img_id not in seen_image_ids:
+                                seen_image_ids.add(img_id)
+                                options.append(CoverOption(
+                                    id=f"art_{img_id}",
+                                    url=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                    url_hd=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                    thumbnail_url=f"https://images.igdb.com/igdb/image/upload/t_cover_small/{img_id}.jpg",
+                                    type="artwork",
+                                    label=f"Official Artwork #{idx+1}",
+                                    width=a.get("width"),
+                                    height=a.get("height")
+                                ))
+                except Exception as e:
+                    print(f"[IGDB] Specific artworks fetch error: {e}")
+
+            # 2. Search IGDB games with query to find all related editions, releases, and screenshots
+            if query:
+                try:
+                    clean_query = query.replace('"', '\\"')
+                    g_body = f"""
+                    search "{clean_query}";
+                    fields name, cover.image_id, cover.width, cover.height, artworks.image_id, artworks.width, artworks.height, screenshots.image_id, screenshots.width, screenshots.height, platforms.name, first_release_date;
+                    limit 15;
+                    """
+                    g_res = await client.post("https://api.igdb.com/v4/games", headers=headers, content=g_body)
+                    if g_res.status_code == 200:
+                        for game_item in g_res.json():
+                            g_name = game_item.get("name", "")
+                            p_names = [p.get("name") for p in game_item.get("platforms", []) if p.get("name")]
+                            year = None
+                            if "first_release_date" in game_item:
+                                year = time.gmtime(game_item["first_release_date"]).tm_year
+
+                            # Edition Cover
+                            cov = game_item.get("cover")
+                            if cov and cov.get("image_id"):
+                                img_id = cov["image_id"]
+                                if img_id not in seen_image_ids:
+                                    seen_image_ids.add(img_id)
+                                    options.append(CoverOption(
+                                        id=f"ed_cover_{img_id}",
+                                        url=f"https://images.igdb.com/igdb/image/upload/t_cover_big/{img_id}.jpg",
+                                        url_hd=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                        thumbnail_url=f"https://images.igdb.com/igdb/image/upload/t_cover_small/{img_id}.jpg",
+                                        type="cover",
+                                        label=f"{g_name} ({', '.join(p_names[:2]) or 'Edition'})",
+                                        width=cov.get("width"),
+                                        height=cov.get("height"),
+                                        platforms=p_names,
+                                        release_year=year
+                                    ))
+
+                            # Artworks
+                            for idx, art in enumerate(game_item.get("artworks", [])):
+                                img_id = art.get("image_id")
+                                if img_id and img_id not in seen_image_ids:
+                                    seen_image_ids.add(img_id)
+                                    options.append(CoverOption(
+                                        id=f"art_{img_id}",
+                                        url=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                        url_hd=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                        thumbnail_url=f"https://images.igdb.com/igdb/image/upload/t_cover_small/{img_id}.jpg",
+                                        type="artwork",
+                                        label=f"{g_name} Artwork #{idx+1}",
+                                        width=art.get("width"),
+                                        height=art.get("height"),
+                                        platforms=p_names,
+                                        release_year=year
+                                    ))
+
+                            # Screenshots
+                            for idx, sc in enumerate(game_item.get("screenshots", [])[:4]):
+                                img_id = sc.get("image_id")
+                                if img_id and img_id not in seen_image_ids:
+                                    seen_image_ids.add(img_id)
+                                    options.append(CoverOption(
+                                        id=f"sc_{img_id}",
+                                        url=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                        url_hd=f"https://images.igdb.com/igdb/image/upload/t_1080p/{img_id}.jpg",
+                                        thumbnail_url=f"https://images.igdb.com/igdb/image/upload/t_cover_small/{img_id}.jpg",
+                                        type="screenshot",
+                                        label=f"{g_name} Screenshot #{idx+1}",
+                                        width=sc.get("width"),
+                                        height=sc.get("height"),
+                                        platforms=p_names,
+                                        release_year=year
+                                    ))
+                except Exception as e:
+                    print(f"[IGDB] Games query for cover search error: {e}")
+
+        return options
+
 
 # Open / fallback database of popular games across platforms for instantaneous search without API keys
 FALLBACK_DATABASE = [
@@ -231,14 +380,11 @@ async def search_metadata(
                 genres=item.get("genres", [])
             ))
 
-    # If no direct match in fallback, generate a clean result per platform
-    # so the user can choose which platform they want to add the game for.
     if not matches and q_clean:
         title = query.strip().title()
         slug_base = query.strip().lower().replace(" ", "-").replace(":", "").replace("'", "")
 
         if platform_id:
-            # Platform filter was specified — return one result for that platform only
             p_info = PLATFORMS.get(platform_id)
             p_name = p_info.name if p_info else platform_id.upper()
             matches.append(GameSearchResult(
@@ -253,8 +399,6 @@ async def search_metadata(
                 genres=["Action", "Retro"]
             ))
         else:
-            # No filter — generate one result per popular platform so the user can
-            # pick the correct console (e.g. Road Rash on Genesis, GBA, N64, PSX…)
             COMMON_PLATFORMS = [
                 "nes", "snes", "n64", "gamecube", "wii",
                 "gb", "gbc", "gba", "nds",
@@ -280,3 +424,37 @@ async def search_metadata(
                 ))
 
     return matches
+
+
+async def search_cover_metadata(
+    query: str,
+    igdb_id: Optional[int] = None,
+    platform_id: Optional[str] = None,
+    client_id: str = "",
+    client_secret: str = ""
+) -> List[CoverOption]:
+    """Search for cover art and artwork options from IGDB or fallback DB."""
+    if client_id and client_secret:
+        igdb = IGDBClient(client_id=client_id, client_secret=client_secret)
+        igdb_covers = await igdb.get_cover_options(query=query, igdb_id=igdb_id, platform_id=platform_id)
+        if igdb_covers:
+            return igdb_covers
+
+    # Fallback to local database if IGDB not configured or returned nothing
+    options: List[CoverOption] = []
+    q_clean = query.lower().strip()
+    for item in FALLBACK_DATABASE:
+        if q_clean in item["title"].lower() or item["title"].lower() in q_clean:
+            if item.get("cover"):
+                options.append(CoverOption(
+                    id=f"fallback_{item['platform_id']}_{item['title']}",
+                    url=item["cover"],
+                    url_hd=item["cover"],
+                    thumbnail_url=item["cover"],
+                    type="cover",
+                    label=f"{item['title']} (Default Cover)",
+                    platforms=[item["platform_id"]],
+                    release_year=item.get("year")
+                ))
+
+    return options

@@ -4,16 +4,27 @@ Queries indexers for ROM/ISO releases, integrates region parsing, and calculates
 """
 
 import logging
+import re
 import urllib.parse
 from typing import List, Dict, Any, Optional
 
 import httpx
-import xmltodict
 
 from backend.app.services.platforms import PLATFORMS
 from backend.app.services.region_parser import parse_release_title, score_and_sort_releases
 
 log = logging.getLogger("romarr.prowlarr")
+
+
+def _extract_info_hash(info_hash: Optional[str], magnet_url: Optional[str]) -> Optional[str]:
+    """Extract or normalize torrent info_hash."""
+    if info_hash and len(info_hash) in (40, 32) and not info_hash.startswith("mock"):
+        return info_hash.lower()
+    if magnet_url:
+        m = re.search(r"urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})", magnet_url)
+        if m:
+            return m.group(1).lower()
+    return None
 
 
 class ProwlarrClient:
@@ -29,7 +40,7 @@ class ProwlarrClient:
         url = f"{self.base_url}/api/v1/system/status"
         headers = {"X-Api-Key": self.api_key}
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200:
@@ -54,37 +65,41 @@ class ProwlarrClient:
         """Search Prowlarr indexers for a game title and platform."""
         raw_releases: List[Dict[str, Any]] = []
 
-        categories = [1000]
         preferred_format = None
+        categories = []
         if platform_id and platform_id in PLATFORMS:
             p_info = PLATFORMS[platform_id]
-            categories = p_info.torznab_categories
+            categories = list(p_info.torznab_categories or [])
             preferred_format = p_info.preferred_format
 
-        search_query = query
-        if platform_id and platform_id in PLATFORMS:
-            search_query = f"{query} {PLATFORMS[platform_id].name.split()[0]}"
+        clean_query = query.strip()
 
-        if self.base_url and self.api_key:
+        if self.base_url and self.api_key and clean_query:
             url = f"{self.base_url}/api/v1/search"
-            params = {
-                "query": search_query,
-                "categories": categories,
-                "type": "search"
-            }
             headers = {"X-Api-Key": self.api_key}
 
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            # Attempt 1: Search with categories if configured
+            params = {
+                "query": clean_query,
+                "type": "search"
+            }
+            if categories:
+                params["categories"] = categories
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
                 try:
                     res = await client.get(url, headers=headers, params=params)
                     if res.status_code == 200:
                         items = res.json()
                         for item in items:
+                            mag = item.get("magnetUrl")
+                            dl = item.get("downloadUrl") or mag
+                            h = _extract_info_hash(item.get("infoHash"), mag)
                             raw_releases.append({
                                 "title": item.get("title", ""),
-                                "download_url": item.get("downloadUrl") or item.get("magnetUrl"),
-                                "magnet_url": item.get("magnetUrl"),
-                                "info_hash": item.get("infoHash"),
+                                "download_url": dl,
+                                "magnet_url": mag,
+                                "info_hash": h,
                                 "size_bytes": item.get("size", 0),
                                 "seeders": item.get("seeders", 0),
                                 "leechers": item.get("leechers", 0),
@@ -94,8 +109,33 @@ class ProwlarrClient:
                 except Exception as exc:
                     log.error("Prowlarr search error: %s", exc)
 
+                # Attempt 2: If categories returned 0 results, fall back to global search
+                if not raw_releases and categories:
+                    try:
+                        log.info("Categories search returned 0 items; falling back to global search for '%s'", clean_query)
+                        fallback_params = {"query": clean_query, "type": "search"}
+                        res2 = await client.get(url, headers=headers, params=fallback_params)
+                        if res2.status_code == 200:
+                            for item in res2.json():
+                                mag = item.get("magnetUrl")
+                                dl = item.get("downloadUrl") or mag
+                                h = _extract_info_hash(item.get("infoHash"), mag)
+                                raw_releases.append({
+                                    "title": item.get("title", ""),
+                                    "download_url": dl,
+                                    "magnet_url": mag,
+                                    "info_hash": h,
+                                    "size_bytes": item.get("size", 0),
+                                    "seeders": item.get("seeders", 0),
+                                    "leechers": item.get("leechers", 0),
+                                    "indexer": item.get("indexer", "Prowlarr"),
+                                    "publish_date": item.get("publishDate")
+                                })
+                    except Exception as exc2:
+                        log.error("Prowlarr fallback search error: %s", exc2)
+
         if not raw_releases:
-            raw_releases = self._generate_realistic_releases(query, platform_id)
+            return []
 
         return score_and_sort_releases(
             releases=raw_releases,
@@ -103,44 +143,3 @@ class ProwlarrClient:
             preferred_format=preferred_format,
             selected_region_filter=region_filter
         )
-
-    def _generate_realistic_releases(self, title: str, platform_id: Optional[str]) -> List[Dict[str, Any]]:
-        """Generate realistic sample ROM/ISO releases for demo / offline use."""
-        p_id = platform_id or "snes"
-        p_info = PLATFORMS.get(p_id)
-        fmt = p_info.preferred_format if p_info else ".zip"
-
-        if p_id in ["ps2", "gamecube", "wii", "xbox"]:
-            sizes = [1450000000, 2100000000, 3800000000]
-        elif p_id in ["psx", "saturn", "dreamcast", "segacd"]:
-            sizes = [450000000, 580000000, 620000000]
-        elif p_id in ["nds", "n64", "gba"]:
-            sizes = [16000000, 32000000, 64000000]
-        else:
-            sizes = [2000000, 4000000, 8000000]
-
-        sample_templates = [
-            {"title_suffix": f"(USA) (En,Fr,Es) {fmt}", "seeders": 42, "leechers": 3, "indexer": "GazelleGames", "size": sizes[0]},
-            {"title_suffix": f"(USA) (Rev 1) {fmt}", "seeders": 28, "leechers": 1, "indexer": "TorrentLeech", "size": sizes[0]},
-            {"title_suffix": f"(Europe) (En,Fr,De,Es,It) {fmt}", "seeders": 19, "leechers": 2, "indexer": "1337x", "size": sizes[1] if len(sizes) > 1 else sizes[0]},
-            {"title_suffix": f"(Japan) (NTSC-J) {fmt}", "seeders": 14, "leechers": 0, "indexer": "Nyaa", "size": sizes[0]},
-            {"title_suffix": f"(Japan) [T-En by Aeon Genesis v1.0] {fmt}", "seeders": 35, "leechers": 2, "indexer": "RetroTorrents", "size": sizes[0]},
-            {"title_suffix": f"(World) (Multi-5) {fmt}", "seeders": 12, "leechers": 1, "indexer": "BitSearch", "size": sizes[2] if len(sizes) > 2 else sizes[0]},
-            {"title_suffix": f"(USA) (ISO / CHD Pack)", "seeders": 9, "leechers": 1, "indexer": "Archive.org", "size": sizes[0]},
-        ]
-
-        results = []
-        for i, t in enumerate(sample_templates):
-            rel_name = f"{title} {t['title_suffix']}"
-            results.append({
-                "title": rel_name,
-                "download_url": f"magnet:?xt=urn:btih:mockhash{i:04d}&dn={urllib.parse.quote(rel_name)}",
-                "magnet_url": f"magnet:?xt=urn:btih:mockhash{i:04d}&dn={urllib.parse.quote(rel_name)}",
-                "info_hash": f"mockhash{i:04d}",
-                "size_bytes": t["size"],
-                "seeders": t["seeders"],
-                "leechers": t["leechers"],
-                "indexer": t["indexer"],
-                "publish_date": "2024-03-15T12:00:00Z"
-            })
-        return results

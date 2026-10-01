@@ -17,12 +17,11 @@ from backend.app.services.settings_service import get_app_settings
 from backend.app.services.prowlarr import ProwlarrClient
 from backend.app.services.qbit import QBitClient
 from backend.app.services.region_parser import parse_release_title
+from backend.app.services.metadata import search_cover_metadata
 
 log = logging.getLogger("romarr.api.games")
 
 router = APIRouter(prefix="/games", tags=["Games"], dependencies=[Depends(require_api_key)])
-
-_SAFE_URL_RE = re.compile(r"^https://", re.IGNORECASE)
 
 
 class GameCreate(BaseModel):
@@ -60,8 +59,8 @@ class GameCreate(BaseModel):
     @field_validator("cover_url", "banner_url")
     @classmethod
     def validate_image_url(cls, v: Optional[str]) -> Optional[str]:
-        if v and not v.startswith("https://"):
-            raise ValueError("Image URLs must use HTTPS.")
+        if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("data:image/")):
+            raise ValueError("Image URLs must use HTTP, HTTPS or data scheme.")
         return v
 
     @field_validator("release_year")
@@ -80,8 +79,23 @@ class GameCreate(BaseModel):
 
 
 class GameUpdate(BaseModel):
+    title: Optional[str] = None
+    cover_url: Optional[str] = None
+    banner_url: Optional[str] = None
     preferred_region: Optional[str] = None
     status: Optional[str] = None
+    summary: Optional[str] = None
+    developer: Optional[str] = None
+    publisher: Optional[str] = None
+    release_year: Optional[int] = None
+    genres: Optional[List[str]] = None
+
+    @field_validator("cover_url", "banner_url")
+    @classmethod
+    def validate_image_url(cls, v: Optional[str]) -> Optional[str]:
+        if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("data:image/")):
+            raise ValueError("Image URLs must use HTTP, HTTPS or data scheme.")
+        return v
 
 
 @router.get("")
@@ -190,9 +204,9 @@ async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
                 game_id=game.id,
                 release_title=best_release["title"],
                 download_client="qbittorrent",
-                download_id=best_release.get("info_hash") or f"mock_{game.id}",
-                status="downloading",
-                progress=5.0,
+                download_id=best_release.get("info_hash") or f"qbit_pending_{game.id}",
+                status="queued",
+                progress=0.0,
                 size_bytes=best_release.get("size_bytes", 0),
                 region=parsed.region.value,
                 format=parsed.format,
@@ -210,7 +224,7 @@ async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
                 password=app_settings.get("qbittorrent_password", "")
             )
             dl_url = best_release.get("download_url", "")
-            if dl_url and not dl_url.startswith("magnet:?xt=urn:btih:mock"):
+            if dl_url:
                 await qbit.add_download(dl_url)
 
     return {"message": "Game added successfully", "game_id": game.id}
@@ -245,6 +259,98 @@ async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.put("/{game_id}")
+async def update_game(game_id: int, data: GameUpdate, db: AsyncSession = Depends(get_db)):
+    """Update game details, cover art, banner, or status."""
+    result = await db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalars().first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    if data.title is not None:
+        game.title = data.title.strip()
+    if data.cover_url is not None:
+        game.cover_url = data.cover_url.strip() if data.cover_url else None
+    if data.banner_url is not None:
+        game.banner_url = data.banner_url.strip() if data.banner_url else None
+    if data.preferred_region is not None:
+        game.preferred_region = data.preferred_region
+    if data.status is not None:
+        game.status = data.status
+    if data.summary is not None:
+        game.summary = data.summary
+    if data.developer is not None:
+        game.developer = data.developer
+    if data.publisher is not None:
+        game.publisher = data.publisher
+    if data.release_year is not None:
+        game.release_year = data.release_year
+    if data.genres is not None:
+        game.genres = ", ".join(data.genres) if data.genres else ""
+
+    await db.commit()
+    await db.refresh(game)
+    log.info("Updated game id=%d ('%s') with new cover/metadata.", game.id, game.title)
+
+    return {
+        "id": game.id,
+        "title": game.title,
+        "slug": game.slug,
+        "platform_id": game.platform_id,
+        "platform_name": game.platform_name,
+        "igdb_id": game.igdb_id,
+        "summary": game.summary,
+        "cover_url": game.cover_url,
+        "banner_url": game.banner_url,
+        "release_year": game.release_year,
+        "developer": game.developer,
+        "publisher": game.publisher,
+        "genres": game.genres.split(", ") if game.genres else [],
+        "status": game.status,
+        "preferred_region": game.preferred_region,
+        "file_path": game.file_path,
+        "file_size_bytes": game.file_size_bytes,
+        "created_at": game.created_at,
+    }
+
+
+@router.get("/{game_id}/cover-options")
+async def get_game_cover_options(
+    game_id: int,
+    query: Optional[str] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Search IGDB (and fallback DB) for alternative cover art, regional editions,
+    official artworks, and screenshots for a specific game.
+    """
+    result = await db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalars().first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    app_settings = await get_app_settings(db)
+    search_q = query.strip() if query and query.strip() else game.title
+
+    options = await search_cover_metadata(
+        query=search_q,
+        igdb_id=game.igdb_id,
+        platform_id=game.platform_id,
+        client_id=app_settings.get("igdb_client_id", ""),
+        client_secret=app_settings.get("igdb_client_secret", "")
+    )
+
+    return {
+        "game_id": game.id,
+        "game_title": game.title,
+        "platform_id": game.platform_id,
+        "query": search_q,
+        "current_cover": game.cover_url,
+        "current_banner": game.banner_url,
+        "options": [opt.model_dump() for opt in options]
+    }
+
+
 @router.delete("/{game_id}")
 async def delete_game(game_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Game).where(Game.id == game_id))
@@ -261,7 +367,6 @@ async def delete_game(game_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{game_id}/download")
 async def download_game_file(game_id: int, db: AsyncSession = Depends(get_db)):
     """Download the ROM file for a game directly to the browsing device."""
-    from fastapi.responses import FileResponse
     result = await db.execute(select(Game).where(Game.id == game_id))
     game = result.scalars().first()
     if not game:

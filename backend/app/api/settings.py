@@ -110,6 +110,23 @@ async def test_qbittorrent(db: AsyncSession = Depends(get_db)):
     return await client.test_connection()
 
 
+from backend.app.services.metadata import IGDBClient
+
+@router.post("/test-igdb")
+async def test_igdb(db: AsyncSession = Depends(get_db)):
+    app_settings = await get_app_settings(db)
+    client_id = app_settings.get("igdb_client_id", "")
+    client_secret = app_settings.get("igdb_client_secret", "")
+    if not client_id or not client_secret:
+        return {"success": False, "message": "IGDB Client ID or Client Secret is missing."}
+
+    igdb = IGDBClient(client_id=client_id, client_secret=client_secret)
+    token = await igdb.get_token()
+    if token:
+        return {"success": True, "message": "Successfully authenticated with Twitch / IGDB API!"}
+    return {"success": False, "message": "Failed to authenticate with Twitch / IGDB. Check Client ID and Client Secret."}
+
+
 @router.post("/rebuild-links")
 async def rebuild_rom_links(db: AsyncSession = Depends(get_db)):
     """

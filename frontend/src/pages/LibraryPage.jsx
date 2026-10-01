@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { Search, Plus, LayoutGrid, List } from 'lucide-react';
+import { Search, Plus, LayoutGrid, List, ArrowDown, Archive, FolderSync, Download, RefreshCw } from 'lucide-react';
 import GameCard from '../components/GameCard';
+import { api } from '../services/api';
 
 export default function LibraryPage({
   games = [],
   platforms = [],
+  queue = [],
   onOpenAddModal,
   onOpenReleases,
+  onOpenCoverModal,
+  onSelectGame,
   onDeleteGame,
   loading = false
 }) {
@@ -16,6 +20,22 @@ export default function LibraryPage({
   const [statusFilter, setStatusFilter] = useState('');
   const [viewMode, setViewMode] = useState('grid');
 
+  // Map active queue items by game_id
+  const queueMap = {};
+  if (Array.isArray(queue)) {
+    queue.forEach(item => {
+      if (item.game_id && item.status !== 'completed') {
+        queueMap[item.game_id] = item;
+      }
+    });
+  }
+
+  const formatSpeed = (bytesPerSec) => {
+    if (!bytesPerSec || bytesPerSec <= 0) return '0 KB/s';
+    if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+    return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+  };
+
   const filteredGames = games.filter((g) => {
     if (searchQuery && !g.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (platformFilter && g.platform_id !== platformFilter) return false;
@@ -23,6 +43,74 @@ export default function LibraryPage({
     if (statusFilter && g.status !== statusFilter) return false;
     return true;
   });
+
+  const renderTableStatus = (game) => {
+    const activeQ = queueMap[game.id];
+    if (activeQ) {
+      if (activeQ.status === 'extracting') {
+        return (
+          <div className="space-y-1 min-w-[130px]">
+            <span className="bg-[#8a6d3b] text-[#fcf8e3] px-1.5 py-0.5 text-[9px] font-bold border border-[#66512c] inline-flex items-center gap-1 animate-pulse">
+              <Archive className="w-2.5 h-2.5" /> EXTRACTING
+            </span>
+            <div className="w-full bg-[#16181a] border border-[#8a6d3b] h-2 relative overflow-hidden">
+              <div className="bg-gradient-to-r from-[#8a6d3b] via-[#f0ad4e] to-[#8a6d3b] h-full w-full animate-pulse" />
+            </div>
+          </div>
+        );
+      }
+      if (activeQ.status === 'organizing') {
+        return (
+          <div className="space-y-1 min-w-[130px]">
+            <span className="bg-[#1b4366] text-[#bce8f1] px-1.5 py-0.5 text-[9px] font-bold border border-[#337ab7] inline-flex items-center gap-1 animate-pulse">
+              <FolderSync className="w-2.5 h-2.5" /> ORGANIZING
+            </span>
+            <div className="w-full bg-[#16181a] border border-[#337ab7] h-2 relative overflow-hidden">
+              <div className="bg-gradient-to-r from-[#204d74] via-[#5bc0de] to-[#204d74] h-full w-full animate-pulse" />
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-1 min-w-[140px]">
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="bg-[#204d74] text-[#d9edf7] px-1.5 py-0.2 font-bold border border-[#1b4366]">
+              {activeQ.progress || 0}%
+            </span>
+            <span className="text-[#8c939d]">{formatSpeed(activeQ.download_speed)}</span>
+          </div>
+          <div className="w-full bg-[#16181a] border border-[#2d3238] h-2 relative overflow-hidden">
+            <div
+              className="bg-[#337ab7] h-full transition-all duration-300"
+              style={{ width: `${activeQ.progress || 0}%` }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (game.status === 'downloaded') {
+      return (
+        <span className="bg-[#3c763d] text-[#dff0d8] px-1.5 py-0.5 text-[10px] font-bold border border-[#2b542c]">
+          DOWNLOADED
+        </span>
+      );
+    }
+
+    if (game.status === 'downloading') {
+      return (
+        <span className="bg-[#204d74] text-[#d9edf7] px-1.5 py-0.5 text-[10px] font-bold border border-[#1b4366]">
+          DOWNLOADING
+        </span>
+      );
+    }
+
+    return (
+      <span className="bg-[#8a6d3b] text-[#fcf8e3] px-1.5 py-0.5 text-[10px] font-bold border border-[#66512c]">
+        WANTED
+      </span>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -130,7 +218,10 @@ export default function LibraryPage({
             <GameCard
               key={game.id}
               game={game}
+              queueItem={queueMap[game.id]}
               onOpenReleases={onOpenReleases}
+              onOpenCoverModal={onOpenCoverModal}
+              onSelectGame={onSelectGame}
               onDelete={onDeleteGame}
             />
           ))}
@@ -144,39 +235,58 @@ export default function LibraryPage({
               <th className="p-2 border-r border-[#2d3238] w-28">Console</th>
               <th className="p-2 border-r border-[#2d3238] w-24">Region</th>
               <th className="p-2 border-r border-[#2d3238] w-20">Year</th>
-              <th className="p-2 border-r border-[#2d3238] w-28">Status</th>
-              <th className="p-2 w-32 text-center">Actions</th>
+              <th className="p-2 border-r border-[#2d3238] w-40">Status / Progress</th>
+              <th className="p-2 w-44 text-center">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#2d3238]">
             {filteredGames.map((game) => (
               <tr key={game.id} className="hover:bg-[#1a1d20] bg-[#22262a]">
                 <td className="p-2 border-r border-[#2d3238] font-bold text-white flex items-center gap-2">
-                  {game.cover_url && <img src={game.cover_url} alt="" className="w-6 h-8 object-cover border border-[#2d3238]" />}
-                  <span>{game.title}</span>
+                  <div
+                    onClick={() => onOpenCoverModal && onOpenCoverModal(game)}
+                    className="cursor-pointer group/thumb relative shrink-0"
+                    title="Click to change cover art"
+                  >
+                    {game.cover_url ? (
+                      <img src={game.cover_url} alt="" className="w-6 h-8 object-cover border border-[#2d3238] group-hover/thumb:border-[#5bc0de]" />
+                    ) : (
+                      <div className="w-6 h-8 bg-[#16181a] border border-[#2d3238] flex items-center justify-center text-[8px] text-[#8c939d]">ROM</div>
+                    )}
+                  </div>
+                  <span
+                    className="truncate hover:text-[#5bc0de] cursor-pointer"
+                    title="Click to view game details"
+                    onClick={() => onSelectGame && onSelectGame(game)}
+                  >
+                    {game.title}
+                  </span>
                 </td>
                 <td className="p-2 border-r border-[#2d3238] font-semibold text-[#8c939d] uppercase">{game.platform_id}</td>
                 <td className="p-2 border-r border-[#2d3238] font-semibold text-[#337ab7]">{game.preferred_region}</td>
                 <td className="p-2 border-r border-[#2d3238] text-[#8c939d]">{game.release_year || '—'}</td>
                 <td className="p-2 border-r border-[#2d3238]">
-                  <span className={`px-1.5 py-0.5 text-[10px] font-bold border ${
-                    game.status === 'downloaded' ? 'bg-[#3c763d] text-[#dff0d8] border-[#2b542c]' :
-                    game.status === 'downloading' ? 'bg-[#204d74] text-[#d9edf7] border-[#1b4366]' :
-                    'bg-[#8a6d3b] text-[#fcf8e3] border-[#66512c]'
-                  }`}>
-                    {game.status.toUpperCase()}
-                  </span>
+                  {renderTableStatus(game)}
                 </td>
-                <td className="p-2 text-center space-x-1.5">
+                <td className="p-2 text-center space-x-1">
                   <button
                     onClick={() => onOpenReleases(game)}
-                    className="bg-[#337ab7] hover:bg-[#286090] text-white px-2 py-0.5 text-xs font-bold border border-[#2e6da4]"
+                    className="bg-[#337ab7] hover:bg-[#286090] text-white px-2 py-0.5 text-[11px] font-bold border border-[#2e6da4]"
+                    title="Search Releases"
                   >
-                    Search
+                    Releases
+                  </button>
+                  <button
+                    onClick={() => onOpenCoverModal && onOpenCoverModal(game)}
+                    className="bg-[#2e3338] hover:bg-[#3e444c] text-[#e6e6e6] px-2 py-0.5 text-[11px] font-bold border border-[#4e555b]"
+                    title="Change Cover Art"
+                  >
+                    Cover
                   </button>
                   <button
                     onClick={() => onDeleteGame(game.id)}
-                    className="bg-[#d9534f] hover:bg-[#c9302c] text-white px-2 py-0.5 text-xs font-bold border border-[#d43f3a]"
+                    className="bg-[#d9534f] hover:bg-[#c9302c] text-white px-2 py-0.5 text-[11px] font-bold border border-[#d43f3a]"
+                    title="Delete Game"
                   >
                     Delete
                   </button>

@@ -141,9 +141,9 @@ async def grab_release(data: GrabReleaseRequest, db: AsyncSession = Depends(get_
         game_id=game.id,
         release_title=data.release_title,
         download_client="qbittorrent",
-        download_id=data.info_hash or f"mock_{game.id}",
-        status="downloading",
-        progress=5.0,
+        download_id=data.info_hash or f"qbit_pending_{game.id}",
+        status="queued",
+        progress=0.0,
         size_bytes=data.size_bytes,
         region=parsed.region.value,
         format=parsed.format,
@@ -155,15 +155,18 @@ async def grab_release(data: GrabReleaseRequest, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(queue_item)
 
-    # Send to qBittorrent if configured and URL is not a mock
+    # Send to qBittorrent if configured
     qbit = QBitClient(
         base_url=app_settings.get("qbittorrent_url", ""),
         username=app_settings.get("qbittorrent_username", ""),
         password=app_settings.get("qbittorrent_password", "")
     )
-    if data.download_url and not data.download_url.startswith("magnet:?xt=urn:btih:mock"):
-        await qbit.add_download(data.download_url)
-        log.info("Dispatched '%s' (game_id=%d) to qBittorrent.", data.release_title, game.id)
+    if data.download_url:
+        success = await qbit.add_download(data.download_url)
+        if success:
+            log.info("Dispatched '%s' (game_id=%d) to qBittorrent.", data.release_title, game.id)
+        else:
+            log.warning("Failed to dispatch '%s' to qBittorrent.", data.release_title)
 
     return {
         "message": f"Grabbed release '{data.release_title}'",

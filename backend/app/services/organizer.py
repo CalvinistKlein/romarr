@@ -243,6 +243,7 @@ class RomOrganizer:
         game_id: int,
         source_path: str,
         release_title: str,
+        queue_item: Optional[DownloadQueueItem] = None,
     ) -> Tuple[bool, str]:
         """
         Extracts (if needed) and sorts a downloaded file into the appropriate
@@ -253,6 +254,10 @@ class RomOrganizer:
         result = await db.execute(select(Game).where(Game.id == game_id))
         game = result.scalars().first()
         if not game:
+            if queue_item:
+                queue_item.status = "failed"
+                queue_item.error_message = f"Game ID {game_id} not found."
+                await db.commit()
             return False, f"Game ID {game_id} not found."
 
         safe_title = _sanitize_filename_part(game.title)
@@ -261,29 +266,14 @@ class RomOrganizer:
 
         source = Path(source_path)
 
-        # ── Mock / offline path ───────────────────────────────────────────────
+        # ── Verify source file path ───────────────────────────────────────────
         if not source.exists():
-            target_folder = get_platform_folder(game.platform_id, self.os_structure)
-            target_dir = (self.roms_root_dir / target_folder).resolve()
-            _assert_within(target_dir, self.roms_root_dir)
-            target_dir.mkdir(parents=True, exist_ok=True)
-
-            parsed = parse_release_title(release_title)
-            p_info = PLATFORMS.get(game.platform_id)
-            ext = p_info.preferred_format if p_info else ".zip"
-            region_str = _sanitize_filename_part(parsed.region.value)
-            dest_filename = f"{safe_title} ({region_str}){ext}"
-            simulated_path = target_dir / dest_filename
-
-            game.status = "downloaded"
-            game.file_path = str(simulated_path)
-            game.file_size_bytes = 1024 * 1024 * 10  # 10 MB simulated
-            await db.commit()
-
-            # Create a link even for simulated paths so the UI / stats are correct
-            # (the target won't exist yet, but the link is created for consistency)
-            self._add_link(simulated_path, safe_title, region_str, game.platform_id)
-            return True, f"Organized {game.title} into {simulated_path}"
+            log.warning("Source path '%s' does not exist on disk for game '%s'", source_path, game.title)
+            if queue_item:
+                queue_item.status = "failed"
+                queue_item.error_message = f"Downloaded source file not found at '{source_path}'."
+                await db.commit()
+            return False, f"Source file '{source_path}' does not exist on disk."
 
         # ── Real file path ────────────────────────────────────────────────────
         target_folder = get_platform_folder(game.platform_id, self.os_structure)
@@ -296,39 +286,91 @@ class RomOrganizer:
             parsed.region.value if parsed.region.value != "UNKNOWN" else "USA"
         )
 
-        is_archive = source.suffix.lower() in ARCHIVE_EXTENSIONS
         p_info = PLATFORMS.get(game.platform_id)
         valid_extensions = p_info.extensions if p_info else [".iso", ".chd", ".bin", ".cue", ".zip"]
 
         files_to_move: List[Path] = []
 
-        if is_archive and self.auto_extract:
-            extract_temp = source.parent / f"_extract_{source.stem}"
-            extract_temp.mkdir(exist_ok=True)
-            try:
-                suffix = source.suffix.lower()
-                if suffix == ".zip":
-                    _safe_extract_zip(source, extract_temp)
-                elif suffix == ".7z":
-                    _safe_extract_7z(source, extract_temp)
-                elif suffix == ".rar":
-                    _safe_extract_rar(source, extract_temp)
+        if source.is_dir():
+            # Torrent downloaded as a directory
+            if queue_item:
+                queue_item.status = "organizing"
+                await db.commit()
 
-                for f in extract_temp.rglob("*"):
-                    if f.is_file() and f.suffix.lower() in valid_extensions:
-                        files_to_move.append(f)
-
-            except ValueError as exc:
-                log.error("Archive path-escape blocked: %s", exc)
-                return False, f"Blocked unsafe archive: {exc}"
-            except Exception as exc:
-                log.error("Archive extraction failed for %s: %s", source, exc)
-                files_to_move = [source]
+            # Check if directory contains archives or raw roms
+            for item in source.rglob("*"):
+                if not item.is_file() or item.name.startswith("."):
+                    continue
+                suffix = item.suffix.lower()
+                if suffix in ARCHIVE_EXTENSIONS and self.auto_extract:
+                    if queue_item:
+                        queue_item.status = "extracting"
+                        await db.commit()
+                    extract_temp = item.parent / f"_extract_{item.stem}"
+                    extract_temp.mkdir(exist_ok=True)
+                    try:
+                        if suffix == ".zip":
+                            _safe_extract_zip(item, extract_temp)
+                        elif suffix == ".7z":
+                            _safe_extract_7z(item, extract_temp)
+                        elif suffix == ".rar":
+                            _safe_extract_rar(item, extract_temp)
+                        for f in extract_temp.rglob("*"):
+                            if f.is_file() and f.suffix.lower() in valid_extensions:
+                                files_to_move.append(f)
+                    except Exception as exc:
+                        log.error("Folder archive extraction failed for %s: %s", item, exc)
+                elif suffix in valid_extensions:
+                    files_to_move.append(item)
         else:
-            files_to_move = [source]
+            is_archive = source.suffix.lower() in ARCHIVE_EXTENSIONS
+            if is_archive and self.auto_extract:
+                if queue_item:
+                    queue_item.status = "extracting"
+                    await db.commit()
+
+                extract_temp = source.parent / f"_extract_{source.stem}"
+                extract_temp.mkdir(exist_ok=True)
+                try:
+                    suffix = source.suffix.lower()
+                    if suffix == ".zip":
+                        _safe_extract_zip(source, extract_temp)
+                    elif suffix == ".7z":
+                        _safe_extract_7z(source, extract_temp)
+                    elif suffix == ".rar":
+                        _safe_extract_rar(source, extract_temp)
+
+                    for f in extract_temp.rglob("*"):
+                        if f.is_file() and f.suffix.lower() in valid_extensions:
+                            files_to_move.append(f)
+
+                except ValueError as exc:
+                    log.error("Archive path-escape blocked: %s", exc)
+                    if queue_item:
+                        queue_item.status = "failed"
+                        queue_item.error_message = f"Blocked unsafe archive: {exc}"
+                        await db.commit()
+                    return False, f"Blocked unsafe archive: {exc}"
+                except Exception as exc:
+                    log.error("Archive extraction failed for %s: %s", source, exc)
+                    files_to_move = [source]
+            else:
+                files_to_move = [source]
 
         if not files_to_move:
-            files_to_move = [source]
+            if source.is_file():
+                files_to_move = [source]
+            else:
+                log.warning("No valid ROM files found inside directory %s for platform %s", source, game.platform_id)
+                if queue_item:
+                    queue_item.status = "failed"
+                    queue_item.error_message = f"No valid ROM files found for platform '{game.platform_id}'."
+                    await db.commit()
+                return False, f"No valid ROM files found in {source}"
+
+        if queue_item:
+            queue_item.status = "organizing"
+            await db.commit()
 
         final_path = ""
         total_bytes = 0
@@ -352,9 +394,21 @@ class RomOrganizer:
             except Exception as exc:
                 log.error("Error moving file %s → %s: %s", f_path, dest_file, exc)
 
+        if not final_path or not Path(final_path).exists():
+            log.error("Failed to move/organize any valid file for game '%s'", game.title)
+            if queue_item:
+                queue_item.status = "failed"
+                queue_item.error_message = f"Failed to place organized ROM file in {target_dir}."
+                await db.commit()
+            return False, f"Could not move valid ROM file for {game.title}"
+
         game.status = "downloaded"
-        game.file_path = final_path or str(target_dir / f"{safe_title} ({region_str}).rom")
+        game.file_path = final_path
         game.file_size_bytes = total_bytes
+        if queue_item:
+            queue_item.status = "completed"
+            queue_item.progress = 100.0
+            queue_item.completed_at = datetime.now(timezone.utc)
         await db.commit()
 
         log.info("Organized '%s' → %s", game.title, final_path)

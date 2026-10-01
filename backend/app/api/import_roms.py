@@ -366,3 +366,169 @@ async def upload_and_import_roms(
         "skipped": skipped_items,
         "errors": errors,
     }
+
+
+@router.post("/scan")
+async def scan_and_import_folder(
+    data: ScanFolderRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Scan a server directory (such as /downloads or an unorganized ROM directory),
+    detect console platforms, unpack archives, and organize into the ROM library.
+    """
+    target_path = Path(data.folder_path).resolve()
+    if not target_path.exists() or not target_path.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Directory '{data.folder_path}' does not exist on the server."
+        )
+
+    app_settings = await get_app_settings(db)
+    roms_root = app_settings.get("roms_root_dir", "/roms")
+    os_structure = app_settings.get("os_structure", "batocera")
+    enable_rom_links = app_settings.get("enable_rom_links", True)
+    rom_links_dir_name = app_settings.get("rom_links_dir_name", "ROM_links")
+
+    organizer = RomOrganizer(
+        roms_root_dir=roms_root,
+        os_structure=os_structure,
+        auto_extract=data.auto_extract,
+        enable_rom_links=enable_rom_links,
+        rom_links_dir_name=rom_links_dir_name,
+    )
+
+    imported_items = []
+    skipped_items = []
+    errors = []
+
+    # Temporary staging directory for extracted contents
+    temp_dir = Path(settings.DATA_DIR) / "temp_scans" / os.urandom(8).hex()
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Collect candidate files
+        files_to_process: List[Dict[str, Any]] = []
+
+        for p in target_path.rglob("*"):
+            if not p.is_file() or p.name.startswith("."):
+                continue
+
+            rel_hint = str(p.parent.relative_to(target_path))
+            folder_hint = rel_hint if rel_hint != "." else ""
+            suffix = p.suffix.lower()
+
+            if suffix in ARCHIVE_EXTS and data.auto_extract:
+                extract_dest = temp_dir / f"_extracted_{p.stem}_{os.urandom(4).hex()}"
+                extract_dest.mkdir(parents=True, exist_ok=True)
+                try:
+                    if suffix == ".zip":
+                        _safe_extract_zip(p, extract_dest)
+                    elif suffix == ".7z":
+                        _safe_extract_7z(p, extract_dest)
+                    elif suffix == ".rar":
+                        _safe_extract_rar(p, extract_dest)
+
+                    for extracted_file in extract_dest.rglob("*"):
+                        if extracted_file.is_file() and extracted_file.suffix.lower() not in ARCHIVE_EXTS:
+                            inner_hint = str(extracted_file.parent.relative_to(extract_dest))
+                            combo_hint = f"{folder_hint}/{inner_hint}" if folder_hint else inner_hint
+                            files_to_process.append({
+                                "path": extracted_file,
+                                "orig_filename": extracted_file.name,
+                                "folder_hint": combo_hint,
+                            })
+                except Exception as exc:
+                    log.error("Failed to extract %s: %s", p.name, exc)
+                    errors.append(f"Failed to extract {p.name}: {str(exc)}")
+                    files_to_process.append({
+                        "path": p,
+                        "orig_filename": p.name,
+                        "folder_hint": folder_hint,
+                    })
+            else:
+                files_to_process.append({
+                    "path": p,
+                    "orig_filename": p.name,
+                    "folder_hint": folder_hint,
+                })
+
+        for rom_info in files_to_process:
+            f_path = rom_info["path"]
+            suffix = f_path.suffix.lower()
+
+            if suffix in {".txt", ".nfo", ".jpg", ".png", ".srm", ".state", ".db", ".ds_store"} or f_path.name.startswith("."):
+                continue
+
+            chosen_platform = data.platform_id
+            if not chosen_platform or chosen_platform == "auto":
+                chosen_platform = detect_platform(f_path.name, rom_info["folder_hint"])
+
+            if not chosen_platform or chosen_platform not in PLATFORMS:
+                skipped_items.append({
+                    "filename": f_path.name,
+                    "reason": "Could not auto-detect platform from folder or extension."
+                })
+                continue
+
+            p_info = PLATFORMS[chosen_platform]
+            parsed = parse_release_title(f_path.stem)
+            game_title = parsed.clean_title or f_path.stem
+            region_str = parsed.region.value if parsed.region.value != "UNKNOWN" else "USA"
+
+            res = await db.execute(
+                select(Game).where(Game.title == game_title, Game.platform_id == chosen_platform)
+            )
+            game = res.scalars().first()
+
+            if not game:
+                game = Game(
+                    title=game_title,
+                    slug=re.sub(r"[^a-z0-9\-]", "", game_title.lower().replace(" ", "-").replace(":", "")),
+                    platform_id=chosen_platform,
+                    platform_name=p_info.name,
+                    summary=f"Imported ROM from server: {f_path.name}",
+                    status="downloaded",
+                    preferred_region=region_str,
+                )
+                db.add(game)
+                await db.commit()
+                await db.refresh(game)
+
+            success, msg = await organizer.organize_game_file(
+                db=db,
+                game_id=game.id,
+                source_path=str(f_path),
+                release_title=f_path.name
+            )
+
+            if success:
+                imported_items.append({
+                    "id": game.id,
+                    "title": game.title,
+                    "platform": p_info.name,
+                    "platform_id": chosen_platform,
+                    "region": region_str,
+                    "file_name": Path(game.file_path).name if game.file_path else f_path.name,
+                    "size_bytes": game.file_size_bytes,
+                })
+            else:
+                errors.append(f"Failed to organize {game_title}: {msg}")
+
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "scanned_path": str(target_path),
+        "imported_count": len(imported_items),
+        "skipped_count": len(skipped_items),
+        "errors_count": len(errors),
+        "imported": imported_items,
+        "skipped": skipped_items,
+        "errors": errors,
+    }
+
