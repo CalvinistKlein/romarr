@@ -25,7 +25,9 @@ export default function SettingsPage() {
     auto_extract_archives: true,
     delete_archive_after_extraction: true,
     igdb_client_id: '',
-    igdb_client_secret: ''
+    igdb_client_secret: '',
+    enable_rom_links: true,
+    rom_links_dir_name: 'ROM_links',
   });
 
   const [loading, setLoading] = useState(true);
@@ -34,6 +36,8 @@ export default function SettingsPage() {
 
   const [prowlarrTest, setProwlarrTest] = useState(null);
   const [qbitTest, setQbitTest] = useState(null);
+  const [rebuildStatus, setRebuildStatus] = useState(null);
+  const [rebuilding, setRebuilding] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -83,6 +87,22 @@ export default function SettingsPage() {
       setQbitTest({ status: res.success ? 'success' : 'error', message: res.message });
     } catch (err) {
       setQbitTest({ status: 'error', message: 'Connection failed.' });
+    }
+  };
+
+  const handleRebuildLinks = async () => {
+    setRebuilding(true);
+    setRebuildStatus({ status: 'running', message: 'Rebuilding ROM links…' });
+    try {
+      const res = await api.rebuildRomLinks();
+      setRebuildStatus({
+        status: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+    } catch (err) {
+      setRebuildStatus({ status: 'error', message: `Rebuild failed: ${err.message}` });
+    } finally {
+      setRebuilding(false);
     }
   };
 
@@ -323,6 +343,73 @@ export default function SettingsPage() {
             />
             <span className="text-[#e6e6e6]">Automatically extract compressed archives (.zip, .7z, .rar)</span>
           </label>
+        </div>
+      </div>
+
+      {/* 5. ROM Links */}
+      <div className="bg-[#22262a] border border-[#2d3238] p-4 space-y-3">
+        <div className="flex items-center justify-between border-b border-[#2d3238] pb-1.5">
+          <div>
+            <h2 className="text-sm font-bold text-white uppercase">5. Flat ROM Links Directory</h2>
+            <p className="text-[#8c939d] mt-0.5">
+              Creates a folder at{' '}
+              <code className="text-[#e6c07b]">{formData.roms_root_dir}/{formData.rom_links_dir_name || 'ROM_links'}/</code>{' '}
+              containing relative symlinks to every organized ROM — one per game, named{' '}
+              <code className="text-[#e6c07b]">Title (Region) [platform].ext</code>.
+              Point emulators that don&apos;t understand platform subfolders here.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleRebuildLinks}
+            disabled={rebuilding || !formData.enable_rom_links}
+            className="ml-4 shrink-0 bg-[#22262a] hover:bg-[#2d3238] disabled:opacity-30 text-white px-2.5 py-1 text-xs border border-[#2d3238]"
+          >
+            {rebuilding ? 'Rebuilding…' : '↻ Rebuild Now'}
+          </button>
+        </div>
+
+        {rebuildStatus && (
+          <div className={`p-2 text-xs border ${
+            rebuildStatus.status === 'success'
+              ? 'bg-[#3c763d] text-[#dff0d8] border-[#2b542c]'
+              : rebuildStatus.status === 'running'
+              ? 'bg-[#2e4a6e] text-[#d9edf7] border-[#1e3a5a]'
+              : 'bg-[#a94442] text-[#f2dede] border-[#843534]'
+          }`}>
+            {rebuildStatus.message}
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={formData.enable_rom_links}
+              onChange={(e) => setFormData({ ...formData, enable_rom_links: e.target.checked })}
+              className="w-3.5 h-3.5 bg-[#16181a] border-[#2d3238] text-[#337ab7]"
+            />
+            <span className="text-[#e6e6e6]">Enable flat ROM_links directory (symlinks to all organized ROMs)</span>
+          </label>
+
+          {formData.enable_rom_links && (
+            <div className="mt-2">
+              <label className="block text-[#8c939d] mb-1 font-semibold">
+                Folder name <span className="text-[#8c939d] font-normal">(created inside ROMs Root)</span>:
+              </label>
+              <input
+                type="text"
+                value={formData.rom_links_dir_name}
+                onChange={(e) => setFormData({ ...formData, rom_links_dir_name: e.target.value })}
+                placeholder="ROM_links"
+                className="w-full sm:w-64 bg-[#16181a] border border-[#2d3238] text-white px-2.5 py-1.5 focus:outline-none"
+              />
+              <p className="text-[#8c939d] mt-1">
+                Full path:{' '}
+                <code className="text-[#e6c07b]">{formData.roms_root_dir}/{formData.rom_links_dir_name || 'ROM_links'}/</code>
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </form>

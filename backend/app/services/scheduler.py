@@ -43,7 +43,9 @@ async def update_download_queue_task():
             organizer = RomOrganizer(
                 roms_root_dir=app_settings.get("roms_root_dir", "/roms"),
                 os_structure=app_settings.get("os_structure", "batocera"),
-                auto_extract=app_settings.get("auto_extract_archives", True)
+                auto_extract=app_settings.get("auto_extract_archives", True),
+                enable_rom_links=app_settings.get("enable_rom_links", True),
+                rom_links_dir_name=app_settings.get("rom_links_dir_name", "ROM_links"),
             )
 
             for item in active_items:

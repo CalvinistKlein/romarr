@@ -1,16 +1,32 @@
 """
 Post-Processor and ROM Organizer.
 Handles archive extraction (.zip, .7z, .rar) and sorting into Batocera / RetroPie directory structures.
+
+After every real-file organization, if `enable_rom_links` is set, a relative
+symlink is created (or refreshed) in:
+
+    <roms_root_dir>/<rom_links_dir_name>/
+
+The link name format is:
+    <title> (<region>) [<platform_id>]<ext>
+
+The [platform_id] bracket disambiguates games with the same title on different
+platforms (e.g. "Rayman (USA) [psx].chd" vs "Rayman (USA) [ps2].iso").
+
+The symlink is relative, so it survives if the entire roms_root_dir tree is
+moved as a unit (e.g. to a new drive letter on Windows or a different mount
+point on Linux).
 """
 
 import logging
+import os
 import re
 import shutil
 import zipfile
 import py7zr
 import rarfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,20 +38,19 @@ from backend.app.services.settings_service import get_app_settings
 log = logging.getLogger("romarr.organizer")
 
 ARCHIVE_EXTENSIONS = {".zip", ".7z", ".rar", ".tar", ".gz"}
-# Max length for a filename component derived from game title
 _MAX_TITLE_LEN = 180
-# Characters allowed in destination filename components
 _SAFE_FILENAME_RE = re.compile(r"[^\w\s\-\(\)\[\]'\.,&!#]")
 
+
+# ── Filename sanitization ─────────────────────────────────────────────────────
 
 def _sanitize_filename_part(text: str) -> str:
     """
     Strip characters that could be used for path traversal or shell injection
-    and enforce a maximum length.  This is applied to any user-supplied string
-    (game title, region) that ends up in a filesystem path.
+    and enforce a maximum length.  Applied to any user-supplied string that
+    ends up in a filesystem path.
     """
     cleaned = _SAFE_FILENAME_RE.sub("", text).strip()
-    # Collapse consecutive spaces/dots and remove leading dots (hidden files)
     cleaned = re.sub(r"\s+", " ", cleaned).lstrip(".")
     return cleaned[:_MAX_TITLE_LEN]
 
@@ -43,7 +58,7 @@ def _sanitize_filename_part(text: str) -> str:
 def _assert_within(dest: Path, base: Path) -> None:
     """
     Raise ValueError if *dest* is not strictly under *base* (path-escape guard).
-    Must be called with resolved paths.
+    Call with resolved paths only.
     """
     try:
         dest.relative_to(base)
@@ -51,7 +66,7 @@ def _assert_within(dest: Path, base: Path) -> None:
         raise ValueError(f"Path escape detected: {dest} is not under {base}")
 
 
-# ── Zip Slip safe extractors ──────────────────────────────────────────────────
+# ── Zip Slip-safe extractors ──────────────────────────────────────────────────
 
 def _safe_extract_zip(src: Path, dest: Path) -> None:
     dest_resolved = dest.resolve()
@@ -80,40 +95,174 @@ def _safe_extract_rar(src: Path, dest: Path) -> None:
         r.extractall(dest_resolved)
 
 
+# ── ROM link helpers ──────────────────────────────────────────────────────────
+
+def _link_name(safe_title: str, region_str: str, platform_id: str, suffix: str) -> str:
+    """Build the canonical symlink filename for a ROM."""
+    safe_platform = _sanitize_filename_part(platform_id)
+    return f"{safe_title} ({region_str}) [{safe_platform}]{suffix}"
+
+
+def _upsert_symlink(target: Path, link: Path) -> None:
+    """
+    Create or refresh a symlink at *link* pointing to *target*.
+    Uses a relative path so the tree is portable.
+    Silently replaces stale or broken links.
+    """
+    try:
+        rel = Path(os.path.relpath(target, link.parent))
+        if link.is_symlink():
+            if link.resolve() == target.resolve():
+                return  # Already correct — nothing to do
+            link.unlink()
+        elif link.exists():
+            # A real file somehow occupies the link path — don't clobber it
+            log.warning("ROM_links slot already occupied by a real file: %s", link)
+            return
+        link.symlink_to(rel)
+        log.info("ROM link: %s → %s", link.name, rel)
+    except Exception as exc:
+        log.warning("Failed to create ROM link %s: %s", link, exc)
+
+
+def _remove_symlink(link: Path) -> None:
+    """Remove a symlink if it exists and is indeed a symlink."""
+    if link.is_symlink():
+        try:
+            link.unlink()
+            log.info("Removed ROM link: %s", link.name)
+        except Exception as exc:
+            log.warning("Failed to remove ROM link %s: %s", link, exc)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RomOrganizer:
-    def __init__(self, roms_root_dir: str, os_structure: str = "batocera", auto_extract: bool = True):
+    def __init__(
+        self,
+        roms_root_dir: str,
+        os_structure: str = "batocera",
+        auto_extract: bool = True,
+        enable_rom_links: bool = True,
+        rom_links_dir_name: str = "ROM_links",
+    ):
         self.roms_root_dir = Path(roms_root_dir).resolve()
         self.os_structure = os_structure
         self.auto_extract = auto_extract
+        self.enable_rom_links = enable_rom_links
+        self.rom_links_dir_name = _sanitize_filename_part(rom_links_dir_name) or "ROM_links"
+
+    @property
+    def links_dir(self) -> Path:
+        """Absolute path to the ROM_links directory."""
+        return self.roms_root_dir / self.rom_links_dir_name
+
+    def _ensure_links_dir(self) -> Optional[Path]:
+        """
+        Create the ROM_links directory if it doesn't exist.
+        Returns the directory path, or None if links are disabled.
+        """
+        if not self.enable_rom_links:
+            return None
+        d = self.links_dir
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _add_link(self, rom_file: Path, safe_title: str, region_str: str, platform_id: str) -> None:
+        """Create / refresh a symlink for *rom_file* in the ROM_links directory."""
+        links_dir = self._ensure_links_dir()
+        if links_dir is None:
+            return
+        link_name = _link_name(safe_title, region_str, platform_id, rom_file.suffix)
+        link_path = links_dir / link_name
+        _upsert_symlink(rom_file, link_path)
+
+    def _remove_link(self, safe_title: str, region_str: str, platform_id: str, suffix: str) -> None:
+        """Remove the symlink for a ROM (called when a game is deleted/replaced)."""
+        if not self.enable_rom_links:
+            return
+        link_name = _link_name(safe_title, region_str, platform_id, suffix)
+        link_path = self.links_dir / link_name
+        _remove_symlink(link_path)
+
+    async def rebuild_all_rom_links(self, db: AsyncSession) -> Tuple[int, int]:
+        """
+        Walk every game with a file_path in the DB and rebuild the ROM_links
+        directory from scratch.  Returns (created, removed) counts.
+
+        Existing links that no longer correspond to any DB entry are pruned.
+        """
+        links_dir = self._ensure_links_dir()
+        if links_dir is None:
+            return 0, 0
+
+        # Collect all current links (keyed by name) before we start
+        existing_link_names = {
+            p.name for p in links_dir.iterdir() if p.is_symlink()
+        }
+        expected_link_names: set[str] = set()
+        created = 0
+
+        result = await db.execute(select(Game).where(Game.file_path.isnot(None)))
+        games = result.scalars().all()
+
+        for game in games:
+            if not game.file_path:
+                continue
+            rom_path = Path(game.file_path)
+            if not rom_path.exists():
+                continue
+
+            safe_title = _sanitize_filename_part(game.title) or f"game_{game.id}"
+            region_str = _sanitize_filename_part(
+                game.preferred_region if game.preferred_region else "UNKNOWN"
+            )
+
+            link_name = _link_name(safe_title, region_str, game.platform_id, rom_path.suffix)
+            expected_link_names.add(link_name)
+            link_path = links_dir / link_name
+            _upsert_symlink(rom_path, link_path)
+            created += 1
+
+        # Remove stale links that are no longer in the DB
+        stale = existing_link_names - expected_link_names
+        removed = 0
+        for stale_name in stale:
+            stale_path = links_dir / stale_name
+            _remove_symlink(stale_path)
+            removed += 1
+
+        log.info("ROM links rebuild complete: %d created/updated, %d stale removed.", created, removed)
+        return created, removed
+
+    # ── Main organize entry point ─────────────────────────────────────────────
 
     async def organize_game_file(
         self,
         db: AsyncSession,
         game_id: int,
         source_path: str,
-        release_title: str
+        release_title: str,
     ) -> Tuple[bool, str]:
         """
         Extracts (if needed) and sorts a downloaded file into the appropriate
         platform folder.  All path components derived from user data are
-        sanitised before use.
+        sanitised before use.  A ROM link is created/refreshed after each
+        successful file placement.
         """
         result = await db.execute(select(Game).where(Game.id == game_id))
         game = result.scalars().first()
         if not game:
             return False, f"Game ID {game_id} not found."
 
-        # Sanitize user-controlled strings used in filesystem paths
         safe_title = _sanitize_filename_part(game.title)
         if not safe_title:
             safe_title = f"game_{game_id}"
 
         source = Path(source_path)
 
+        # ── Mock / offline path ───────────────────────────────────────────────
         if not source.exists():
-            # Simulate organization for mock/offline downloads
             target_folder = get_platform_folder(game.platform_id, self.os_structure)
             target_dir = (self.roms_root_dir / target_folder).resolve()
             _assert_within(target_dir, self.roms_root_dir)
@@ -124,15 +273,19 @@ class RomOrganizer:
             ext = p_info.preferred_format if p_info else ".zip"
             region_str = _sanitize_filename_part(parsed.region.value)
             dest_filename = f"{safe_title} ({region_str}){ext}"
-            simulated_path = str(target_dir / dest_filename)
+            simulated_path = target_dir / dest_filename
 
             game.status = "downloaded"
-            game.file_path = simulated_path
+            game.file_path = str(simulated_path)
             game.file_size_bytes = 1024 * 1024 * 10  # 10 MB simulated
             await db.commit()
+
+            # Create a link even for simulated paths so the UI / stats are correct
+            # (the target won't exist yet, but the link is created for consistency)
+            self._add_link(simulated_path, safe_title, region_str, game.platform_id)
             return True, f"Organized {game.title} into {simulated_path}"
 
-        # Get target platform folder
+        # ── Real file path ────────────────────────────────────────────────────
         target_folder = get_platform_folder(game.platform_id, self.os_structure)
         target_dir = (self.roms_root_dir / target_folder).resolve()
         _assert_within(target_dir, self.roms_root_dir)
@@ -161,7 +314,6 @@ class RomOrganizer:
                 elif suffix == ".rar":
                     _safe_extract_rar(source, extract_temp)
 
-                # Collect matching ROM files from the extraction directory
                 for f in extract_temp.rglob("*"):
                     if f.is_file() and f.suffix.lower() in valid_extensions:
                         files_to_move.append(f)
@@ -185,7 +337,6 @@ class RomOrganizer:
             dest_name = f"{safe_title} ({region_str}){f_path.suffix}"
             dest_file = (target_dir / dest_name).resolve()
 
-            # Double-check the resolved destination is still under target_dir
             try:
                 _assert_within(dest_file, self.roms_root_dir)
             except ValueError as exc:
@@ -196,6 +347,8 @@ class RomOrganizer:
                 shutil.move(str(f_path), str(dest_file))
                 final_path = str(dest_file)
                 total_bytes += dest_file.stat().st_size
+                # ── Create / refresh ROM link ─────────────────────────────────
+                self._add_link(dest_file, safe_title, region_str, game.platform_id)
             except Exception as exc:
                 log.error("Error moving file %s → %s: %s", f_path, dest_file, exc)
 

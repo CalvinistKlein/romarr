@@ -29,7 +29,10 @@ DEFAULT_SETTINGS = {
     "auto_extract_archives": True,
     "delete_archive_after_extraction": True,
     "igdb_client_id": "",
-    "igdb_client_secret": ""
+    "igdb_client_secret": "",
+    # ROM_links flat symlink directory
+    "enable_rom_links": True,
+    "rom_links_dir_name": "ROM_links",
 }
 
 

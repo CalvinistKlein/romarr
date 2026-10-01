@@ -170,4 +170,12 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  rebuildRomLinks: async () => {
+    const res = await fetch(`${API_BASE}/settings/rebuild-links`, {
+      method: 'POST',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
+    return handleResponse(res);
+  },
 };

@@ -13,6 +13,7 @@ from backend.app.core.security import mask_settings_for_response
 from backend.app.services.settings_service import get_app_settings, update_settings
 from backend.app.services.prowlarr import ProwlarrClient
 from backend.app.services.qbit import QBitClient
+from backend.app.services.organizer import RomOrganizer
 
 log = logging.getLogger("romarr.api.settings")
 
@@ -36,6 +37,9 @@ class SettingsUpdate(BaseModel):
     delete_archive_after_extraction: bool
     igdb_client_id: str
     igdb_client_secret: str
+    # ROM links
+    enable_rom_links: bool = True
+    rom_links_dir_name: str = "ROM_links"
 
     @field_validator("os_structure")
     @classmethod
@@ -56,6 +60,19 @@ class SettingsUpdate(BaseModel):
                 "Update ALLOWED_PATH_PREFIXES in config to add new roots."
             )
         return resolved
+
+    @field_validator("rom_links_dir_name")
+    @classmethod
+    def validate_links_dir_name(cls, v: str) -> str:
+        import re
+        v = v.strip()
+        if not v:
+            raise ValueError("rom_links_dir_name must not be empty.")
+        if re.search(r"[/\\]", v):
+            raise ValueError("rom_links_dir_name must be a single directory name, not a path.")
+        if len(v) > 100:
+            raise ValueError("rom_links_dir_name too long (max 100 chars).")
+        return v
 
 
 @router.get("")
@@ -93,6 +110,37 @@ async def test_qbittorrent(db: AsyncSession = Depends(get_db)):
     return await client.test_connection()
 
 
+@router.post("/rebuild-links")
+async def rebuild_rom_links(db: AsyncSession = Depends(get_db)):
+    """
+    Rebuild the ROM_links flat symlink directory from scratch.
+    Walks every game with a file_path in the DB, creates/refreshes relative
+    symlinks in <roms_root_dir>/<rom_links_dir_name>/, and prunes stale links.
+    """
+    app_settings = await get_app_settings(db)
+
+    if not app_settings.get("enable_rom_links", True):
+        return {"success": False, "message": "ROM links are disabled in settings."}
+
+    organizer = RomOrganizer(
+        roms_root_dir=app_settings.get("roms_root_dir", "/roms"),
+        os_structure=app_settings.get("os_structure", "batocera"),
+        auto_extract=app_settings.get("auto_extract_archives", True),
+        enable_rom_links=True,
+        rom_links_dir_name=app_settings.get("rom_links_dir_name", "ROM_links"),
+    )
+
+    created, removed = await organizer.rebuild_all_rom_links(db)
+    links_dir = str(organizer.links_dir)
+    return {
+        "success": True,
+        "links_dir": links_dir,
+        "created_or_updated": created,
+        "stale_removed": removed,
+        "message": f"Rebuilt {created} links in {links_dir} ({removed} stale removed).",
+    }
+
+
 @router.get("/system-status")
 async def system_status(db: AsyncSession = Depends(get_db)):
     app_settings = await get_app_settings(db)
@@ -107,11 +155,21 @@ async def system_status(db: AsyncSession = Depends(get_db)):
     except Exception as exc:
         log.warning("Failed to read disk usage for %s: %s", roms_path, exc)
 
+    # Count current links
+    links_count = 0
+    links_dir_name = app_settings.get("rom_links_dir_name", "ROM_links")
+    links_dir = roms_path / links_dir_name
+    if links_dir.is_dir():
+        links_count = sum(1 for p in links_dir.iterdir() if p.is_symlink())
+
     return {
         "roms_dir": str(roms_path),
         "os_structure": app_settings.get("os_structure", "batocera"),
         "disk_total_bytes": disk_total,
         "disk_used_bytes": disk_used,
         "disk_free_bytes": disk_free,
-        "preferred_regions": app_settings.get("preferred_regions", ["USA", "EUR", "JPN"])
+        "preferred_regions": app_settings.get("preferred_regions", ["USA", "EUR", "JPN"]),
+        "rom_links_enabled": app_settings.get("enable_rom_links", True),
+        "rom_links_dir": str(links_dir),
+        "rom_links_count": links_count,
     }
