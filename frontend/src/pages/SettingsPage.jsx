@@ -289,6 +289,17 @@ export default function SettingsPage() {
             />
           </div>
         </div>
+
+        <div className="pt-2 flex justify-end border-t border-[#2d3238]">
+          <button
+            type="submit"
+            disabled={saving}
+            className="bg-[#337ab7] hover:bg-[#286090] text-white font-bold px-3.5 py-1.5 border border-[#2e6da4] flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
       </div>
 
       {/* 3. qBittorrent Section */}
@@ -349,6 +360,17 @@ export default function SettingsPage() {
               className="w-full bg-[#16181a] border border-[#2d3238] text-white px-2.5 py-1.5 focus:outline-none"
             />
           </div>
+        </div>
+
+        <div className="pt-2 flex justify-end border-t border-[#2d3238]">
+          <button
+            type="submit"
+            disabled={saving}
+            className="bg-[#337ab7] hover:bg-[#286090] text-white font-bold px-3.5 py-1.5 border border-[#2e6da4] flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
         </div>
       </div>
 
