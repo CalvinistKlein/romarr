@@ -11,13 +11,19 @@
 
 const API_BASE = '/api';
 
-function getApiKey() {
-  // Build-time env var (Vite exposes VITE_* vars)
+export function getApiKey() {
   if (import.meta.env.VITE_ROMARR_API_KEY) {
     return import.meta.env.VITE_ROMARR_API_KEY;
   }
-  // Runtime fallback: key saved in localStorage by user
   return localStorage.getItem('romarr_api_key') || '';
+}
+
+export function setApiKey(key) {
+  if (key) {
+    localStorage.setItem('romarr_api_key', key.trim());
+  } else {
+    localStorage.removeItem('romarr_api_key');
+  }
 }
 
 function buildHeaders(extra = {}) {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Check, AlertTriangle } from 'lucide-react';
-import { api } from '../services/api';
+import { Save, Check, AlertTriangle, Key, ShieldCheck } from 'lucide-react';
+import { api, getApiKey, setApiKey } from '../services/api';
 
 const AVAILABLE_REGIONS = [
   { id: 'USA', label: 'USA / North America 🇺🇸' },
@@ -11,12 +11,15 @@ const AVAILABLE_REGIONS = [
 ];
 
 export default function SettingsPage() {
+  const [clientApiKey, setClientApiKey] = useState(getApiKey());
+  const [apiKeySaveStatus, setApiKeySaveStatus] = useState(null);
+
   const [formData, setFormData] = useState({
-    prowlarr_url: 'http://localhost:9696',
+    prowlarr_url: 'http://host.docker.internal:9696',
     prowlarr_api_key: '',
-    qbittorrent_url: 'http://localhost:8080',
-    qbittorrent_username: 'admin',
-    qbittorrent_password: 'adminadmin',
+    qbittorrent_url: 'http://host.docker.internal:8089',
+    qbittorrent_username: 'calvin',
+    qbittorrent_password: '••••••••',
     qbittorrent_category: 'romarr',
     roms_root_dir: '/roms',
     downloads_dir: '/downloads',
@@ -55,6 +58,14 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveApiKey = (e) => {
+    e.preventDefault();
+    setApiKey(clientApiKey);
+    setApiKeySaveStatus({ type: 'success', message: 'API key saved to browser session.' });
+    setTimeout(() => setApiKeySaveStatus(null), 3000);
+    fetchSettings();
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -64,7 +75,7 @@ export default function SettingsPage() {
       setSaveStatus({ type: 'success', message: 'Settings saved successfully.' });
       setTimeout(() => setSaveStatus(null), 4000);
     } catch (err) {
-      setSaveStatus({ type: 'error', message: 'Failed to save settings.' });
+      setSaveStatus({ type: 'error', message: 'Failed to save settings: ' + err.message });
     } finally {
       setSaving(false);
     }
@@ -76,7 +87,7 @@ export default function SettingsPage() {
       const res = await api.testProwlarr();
       setProwlarrTest({ status: res.success ? 'success' : 'error', message: res.message });
     } catch (err) {
-      setProwlarrTest({ status: 'error', message: 'Connection failed.' });
+      setProwlarrTest({ status: 'error', message: 'Connection failed: ' + err.message });
     }
   };
 
@@ -86,7 +97,7 @@ export default function SettingsPage() {
       const res = await api.testQBittorrent();
       setQbitTest({ status: res.success ? 'success' : 'error', message: res.message });
     } catch (err) {
-      setQbitTest({ status: 'error', message: 'Connection failed.' });
+      setQbitTest({ status: 'error', message: 'Connection failed: ' + err.message });
     }
   };
 
@@ -116,27 +127,66 @@ export default function SettingsPage() {
     setFormData(prev => ({ ...prev, preferred_regions: list }));
   };
 
-  if (loading) {
-    return <div className="p-8 text-center text-[#8c939d]">Loading settings...</div>;
-  }
-
   return (
-    <form onSubmit={handleSave} className="space-y-6 max-w-4xl text-xs">
-      <div className="flex items-center justify-between pb-3 border-b border-[#2d3238]">
-        <div>
-          <h1 className="text-xl font-bold text-white">Application Configuration</h1>
-          <p className="text-[#8c939d]">Manage indexers, region sorting priority, and downloader clients</p>
+    <div className="space-y-6 max-w-4xl text-xs">
+      {/* 0. Romarr Client API Key Setup */}
+      <div className="bg-[#22262a] border border-[#2d3238] p-4 space-y-3">
+        <div className="flex items-center justify-between border-b border-[#2d3238] pb-1.5">
+          <div className="flex items-center gap-2">
+            <Key className="w-4 h-4 text-[#337ab7]" />
+            <h2 className="text-sm font-bold text-white uppercase">Romarr API Key (Browser Authentication)</h2>
+          </div>
+          {clientApiKey ? (
+            <span className="flex items-center gap-1 text-[#5cb85c] font-semibold text-[11px]">
+              <ShieldCheck className="w-3.5 h-3.5" /> Authenticated
+            </span>
+          ) : (
+            <span className="text-[#a94442] font-semibold text-[11px]">Key Not Set</span>
+          )}
         </div>
+        <p className="text-[#8c939d]">
+          If API requests return 403 Forbidden, enter the Romarr API key generated in <code className="text-[#e6c07b]">config/api_key.txt</code>:
+        </p>
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="bg-[#337ab7] hover:bg-[#286090] text-white font-bold px-4 py-1.5 border border-[#2e6da4] flex items-center gap-1.5"
-        >
-          <Save className="w-3.5 h-3.5" />
-          <span>{saving ? 'Saving...' : 'Save Settings'}</span>
-        </button>
+        <form onSubmit={handleSaveApiKey} className="flex gap-2">
+          <input
+            type="password"
+            value={clientApiKey}
+            onChange={(e) => setClientApiKey(e.target.value)}
+            placeholder="Paste your Romarr API key here..."
+            className="flex-1 bg-[#16181a] border border-[#2d3238] text-white px-2.5 py-1.5 focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="bg-[#337ab7] hover:bg-[#286090] text-white font-bold px-3 py-1.5 border border-[#2e6da4] flex items-center gap-1"
+          >
+            <span>Save Key</span>
+          </button>
+        </form>
+
+        {apiKeySaveStatus && (
+          <div className="p-2 text-xs border bg-[#3c763d] text-[#dff0d8] border-[#2b542c]">
+            {apiKeySaveStatus.message}
+          </div>
+        )}
       </div>
+
+      <form onSubmit={handleSave} className="space-y-6">
+        <div className="flex items-center justify-between pb-3 border-b border-[#2d3238]">
+          <div>
+            <h1 className="text-xl font-bold text-white">Application Configuration</h1>
+            <p className="text-[#8c939d]">Manage indexers, region sorting priority, and downloader clients</p>
+          </div>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="bg-[#337ab7] hover:bg-[#286090] text-white font-bold px-4 py-1.5 border border-[#2e6da4] flex items-center gap-1.5"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
 
       {saveStatus && (
         <div className={`p-2.5 text-xs font-semibold border ${
@@ -413,5 +463,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </form>
+  </div>
   );
 }
