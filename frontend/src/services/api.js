@@ -184,4 +184,31 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  // Import
+  getImportPlatforms: async () => {
+    const res = await fetch(`${API_BASE}/import/platforms`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
+    return handleResponse(res);
+  },
+
+  uploadRoms: async (formData) => {
+    const key = getApiKey();
+    const headers = {};
+    if (key) headers['X-Api-Key'] = key;
+
+    const res = await fetch(`${API_BASE}/import/upload`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    return handleResponse(res);
+  },
+
+  getGameDownloadUrl: (gameId) => {
+    const key = getApiKey();
+    const q = key ? `?api_key=${encodeURIComponent(key)}` : '';
+    return `${API_BASE}/games/${gameId}/download${q}`;
+  },
 };

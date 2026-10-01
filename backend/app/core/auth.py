@@ -20,12 +20,13 @@ from pathlib import Path
 from functools import lru_cache
 
 from fastapi import Security, HTTPException, status
-from fastapi.security.api_key import APIKeyHeader
+from fastapi.security.api_key import APIKeyHeader, APIKeyQuery
 
 log = logging.getLogger("romarr.auth")
 
 API_KEY_HEADER_NAME = "X-Api-Key"
 _api_key_header = APIKeyHeader(name=API_KEY_HEADER_NAME, auto_error=False)
+_api_key_query = APIKeyQuery(name="api_key", auto_error=False)
 
 
 @lru_cache(maxsize=1)
@@ -66,16 +67,18 @@ def _resolve_api_key() -> str:
     return new_key
 
 
-async def require_api_key(key: str = Security(_api_key_header)) -> str:
-    """FastAPI dependency — rejects requests missing a valid X-Api-Key header."""
+async def require_api_key(
+    header_key: str = Security(_api_key_header),
+    query_key: str = Security(_api_key_query),
+) -> str:
+    """FastAPI dependency — accepts X-Api-Key header or ?api_key= query parameter."""
     active = _resolve_api_key()
     if not active:
-        # Safety valve: if key resolution somehow returned empty, allow through
-        # (avoids hard-lockout on misconfiguration)
         return ""
+    key = header_key or query_key
     if not key or not secrets.compare_digest(key, active):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid or missing API key. Set the X-Api-Key request header.",
+            detail="Invalid or missing API key. Set the X-Api-Key header or ?api_key= query parameter.",
         )
     return key

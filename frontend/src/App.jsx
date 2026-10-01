@@ -4,6 +4,7 @@ import LibraryPage from './pages/LibraryPage';
 import QueuePage from './pages/QueuePage';
 import PlatformsPage from './pages/PlatformsPage';
 import SettingsPage from './pages/SettingsPage';
+import ImportPage from './pages/ImportPage';
 import AddGameModal from './components/AddGameModal';
 import ReleaseModal from './components/ReleaseModal';
 import { api } from './services/api';
@@ -122,6 +123,16 @@ export default function App() {
             onOpenReleases={(game) => setSelectedGameForReleases(game)}
             onDeleteGame={handleDeleteGame}
             loading={loading}
+          />
+        )}
+
+        {currentTab === 'import' && (
+          <ImportPage
+            onNavigateToLibrary={() => {
+              setCurrentTab('library');
+              fetchGames();
+              fetchPlatforms();
+            }}
           />
         )}
 

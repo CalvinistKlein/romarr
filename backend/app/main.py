@@ -21,6 +21,7 @@ from backend.app.api.releases import router as releases_router
 from backend.app.api.queue import router as queue_router
 from backend.app.api.settings import router as settings_router
 from backend.app.api.platforms import router as platforms_router
+from backend.app.api.import_roms import router as import_router
 
 # Configure structured logging before anything else
 configure_logging(settings.LOG_LEVEL)
@@ -81,6 +82,7 @@ app.include_router(releases_router, prefix=settings.API_PREFIX)
 app.include_router(queue_router, prefix=settings.API_PREFIX)
 app.include_router(settings_router, prefix=settings.API_PREFIX)
 app.include_router(platforms_router, prefix=settings.API_PREFIX)
+app.include_router(import_router, prefix=settings.API_PREFIX)
 
 @app.get("/api/health")
 async def health_check():

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Search, Trash2, Check, Clock, Download } from 'lucide-react';
+import { api } from '../services/api';
 
 export default function GameCard({ game, onOpenReleases, onDelete }) {
   const getStatusTag = (status) => {
@@ -81,21 +82,34 @@ export default function GameCard({ game, onOpenReleases, onDelete }) {
         </div>
 
         {/* Flat Action Buttons */}
-        <div className="mt-2.5 pt-2 border-t border-[#2d3238] grid grid-cols-2 gap-1.5">
-          <button
-            onClick={() => onOpenReleases(game)}
-            className="bg-[#337ab7] hover:bg-[#286090] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#2e6da4]"
-          >
-            <Search className="w-3 h-3" />
-            <span>Releases</span>
-          </button>
-          <button
-            onClick={() => onDelete(game.id)}
-            className="bg-[#d9534f] hover:bg-[#c9302c] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#d43f3a]"
-          >
-            <Trash2 className="w-3 h-3" />
-            <span>Delete</span>
-          </button>
+        <div className="mt-2.5 pt-2 border-t border-[#2d3238] space-y-1.5">
+          {game.status === 'downloaded' && (
+            <a
+              href={api.getGameDownloadUrl(game.id)}
+              download
+              className="w-full bg-[#3c763d] hover:bg-[#2b542c] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#2b542c] no-underline"
+              title="Download ROM file to this device"
+            >
+              <Download className="w-3 h-3" />
+              <span>Download ROM</span>
+            </a>
+          )}
+          <div className="grid grid-cols-2 gap-1.5">
+            <button
+              onClick={() => onOpenReleases(game)}
+              className="bg-[#337ab7] hover:bg-[#286090] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#2e6da4]"
+            >
+              <Search className="w-3 h-3" />
+              <span>Releases</span>
+            </button>
+            <button
+              onClick={() => onDelete(game.id)}
+              className="bg-[#d9534f] hover:bg-[#c9302c] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#d43f3a]"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Delete</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

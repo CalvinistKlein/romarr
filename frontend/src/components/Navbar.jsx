@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, RefreshCw, HardDrive, Gamepad2, DownloadCloud, Library, Layers, Settings } from 'lucide-react';
+import { Plus, RefreshCw, HardDrive, Gamepad2, DownloadCloud, Library, Layers, Settings, UploadCloud } from 'lucide-react';
 
 export default function Navbar({
   currentTab,
@@ -18,6 +18,7 @@ export default function Navbar({
 
   const navLinks = [
     { id: 'library', label: 'Library', icon: Library },
+    { id: 'import', label: 'Import', icon: UploadCloud },
     { id: 'queue', label: 'Activity', icon: DownloadCloud, count: queueCount },
     { id: 'platforms', label: 'Consoles', icon: Layers },
     { id: 'settings', label: 'Settings', icon: Settings },

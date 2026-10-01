@@ -253,3 +253,26 @@ async def delete_game(game_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     log.info("Deleted game '%s' (id=%d).", game.title, game_id)
     return {"message": f"Game '{game.title}' removed from library."}
+
+
+@router.get("/{game_id}/download")
+async def download_game_file(game_id: int, db: AsyncSession = Depends(get_db)):
+    """Download the ROM file for a game directly to the browsing device."""
+    from fastapi.responses import FileResponse
+    result = await db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalars().first()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    if not game.file_path:
+        raise HTTPException(status_code=404, detail="No ROM file found in library for this game.")
+
+    p = Path(game.file_path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(status_code=404, detail=f"ROM file '{p.name}' does not exist on disk.")
+
+    return FileResponse(
+        path=str(p),
+        filename=p.name,
+        media_type="application/octet-stream",
+    )
