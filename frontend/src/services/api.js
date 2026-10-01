@@ -1,4 +1,31 @@
+/**
+ * Romarr API client.
+ *
+ * The API key is read from the VITE_ROMARR_API_KEY environment variable at
+ * build time, or falls back to the value stored in localStorage under the
+ * key 'romarr_api_key'.  Set either before building / starting the dev server.
+ *
+ * Development: create frontend/.env.local with:
+ *   VITE_ROMARR_API_KEY=<your-key-from-/app/data/api_key.txt>
+ */
+
 const API_BASE = '/api';
+
+function getApiKey() {
+  // Build-time env var (Vite exposes VITE_* vars)
+  if (import.meta.env.VITE_ROMARR_API_KEY) {
+    return import.meta.env.VITE_ROMARR_API_KEY;
+  }
+  // Runtime fallback: key saved in localStorage by user
+  return localStorage.getItem('romarr_api_key') || '';
+}
+
+function buildHeaders(extra = {}) {
+  const key = getApiKey();
+  const headers = { 'Content-Type': 'application/json', ...extra };
+  if (key) headers['X-Api-Key'] = key;
+  return headers;
+}
 
 async function handleResponse(res) {
   if (!res.ok) {
@@ -20,27 +47,34 @@ export const api = {
     if (params.status) query.append('status', params.status);
     if (params.query) query.append('query', params.query);
     if (params.region) query.append('region', params.region);
-    
-    const res = await fetch(`${API_BASE}/games?${query.toString()}`);
+
+    const res = await fetch(`${API_BASE}/games?${query.toString()}`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   getGame: async (id) => {
-    const res = await fetch(`${API_BASE}/games/${id}`);
+    const res = await fetch(`${API_BASE}/games/${id}`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   addGame: async (gameData) => {
     const res = await fetch(`${API_BASE}/games`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(gameData)
+      headers: buildHeaders(),
+      body: JSON.stringify(gameData),
     });
     return handleResponse(res);
   },
 
   deleteGame: async (id) => {
-    const res = await fetch(`${API_BASE}/games/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/games/${id}`, {
+      method: 'DELETE',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
@@ -48,7 +82,9 @@ export const api = {
   searchCatalog: async (query, platform_id = '') => {
     const params = new URLSearchParams({ query });
     if (platform_id) params.append('platform_id', platform_id);
-    const res = await fetch(`${API_BASE}/search?${params.toString()}`);
+    const res = await fetch(`${API_BASE}/search?${params.toString()}`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
@@ -56,63 +92,82 @@ export const api = {
   getReleases: async (gameId, region = '') => {
     const params = new URLSearchParams({ game_id: gameId });
     if (region && region !== 'ALL') params.append('region', region);
-    const res = await fetch(`${API_BASE}/releases?${params.toString()}`);
+    const res = await fetch(`${API_BASE}/releases?${params.toString()}`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   grabRelease: async (releaseData) => {
     const res = await fetch(`${API_BASE}/releases/grab`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(releaseData)
+      headers: buildHeaders(),
+      body: JSON.stringify(releaseData),
     });
     return handleResponse(res);
   },
 
   // Queue
   getQueue: async () => {
-    const res = await fetch(`${API_BASE}/queue`);
+    const res = await fetch(`${API_BASE}/queue`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   cancelQueueItem: async (id) => {
-    const res = await fetch(`${API_BASE}/queue/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/queue/${id}`, {
+      method: 'DELETE',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   // Platforms
   getPlatforms: async () => {
-    const res = await fetch(`${API_BASE}/platforms`);
+    const res = await fetch(`${API_BASE}/platforms`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   // Settings
   getSettings: async () => {
-    const res = await fetch(`${API_BASE}/settings`);
+    const res = await fetch(`${API_BASE}/settings`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   saveSettings: async (settings) => {
     const res = await fetch(`${API_BASE}/settings`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(settings)
+      headers: buildHeaders(),
+      body: JSON.stringify(settings),
     });
     return handleResponse(res);
   },
 
   testProwlarr: async () => {
-    const res = await fetch(`${API_BASE}/settings/test-prowlarr`, { method: 'POST' });
+    const res = await fetch(`${API_BASE}/settings/test-prowlarr`, {
+      method: 'POST',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   testQBittorrent: async () => {
-    const res = await fetch(`${API_BASE}/settings/test-qbittorrent`, { method: 'POST' });
+    const res = await fetch(`${API_BASE}/settings/test-qbittorrent`, {
+      method: 'POST',
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
   },
 
   getSystemStatus: async () => {
-    const res = await fetch(`${API_BASE}/settings/system-status`);
+    const res = await fetch(`${API_BASE}/settings/system-status`, {
+      headers: buildHeaders({ 'Content-Type': undefined }),
+    });
     return handleResponse(res);
-  }
+  },
 };

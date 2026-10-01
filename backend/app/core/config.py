@@ -18,7 +18,16 @@ class Settings(BaseSettings):
     # Defaults
     OS_STRUCTURE: str = os.getenv("OS_STRUCTURE", "batocera") # "batocera", "retropie", "recalbox", "es-de"
     PREFERRED_REGIONS: list[str] = ["USA", "EUR", "JPN", "WORLD"]
-    
+
+    # Security — API key auth (leave empty to auto-generate on first startup)
+    ROMARR_API_KEY: str = os.getenv("ROMARR_API_KEY", "")
+
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Allowlisted path prefixes for roms_root_dir / downloads_dir settings
+    ALLOWED_PATH_PREFIXES: list[str] = ["/roms", "/downloads", "/media", "/mnt", "/DATA", "/data"]
+
     class Config:
         env_file = ".env"
         extra = "allow"

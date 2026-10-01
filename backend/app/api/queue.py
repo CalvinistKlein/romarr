@@ -1,14 +1,18 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import List
 
 from backend.app.core.database import get_db
+from backend.app.core.auth import require_api_key
 from backend.app.models.models import DownloadQueueItem, Game
 from backend.app.services.settings_service import get_app_settings
 from backend.app.services.qbit import QBitClient
 
-router = APIRouter(prefix="/queue", tags=["Queue"])
+log = logging.getLogger("romarr.api.queue")
+
+router = APIRouter(prefix="/queue", tags=["Queue"], dependencies=[Depends(require_api_key)])
+
 
 @router.get("")
 async def list_queue(db: AsyncSession = Depends(get_db)):
@@ -44,6 +48,7 @@ async def list_queue(db: AsyncSession = Depends(get_db)):
 
     return queue_items
 
+
 @router.delete("/{queue_id}")
 async def cancel_queue_item(queue_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(DownloadQueueItem).where(DownloadQueueItem.id == queue_id))
@@ -51,16 +56,16 @@ async def cancel_queue_item(queue_id: int, db: AsyncSession = Depends(get_db)):
     if not item:
         raise HTTPException(status_code=404, detail="Queue item not found")
 
-    settings = await get_app_settings(db)
+    app_settings = await get_app_settings(db)
     if item.download_id and not item.download_id.startswith("mock"):
         qbit = QBitClient(
-            base_url=settings.get("qbittorrent_url", ""),
-            username=settings.get("qbittorrent_username", ""),
-            password=settings.get("qbittorrent_password", "")
+            base_url=app_settings.get("qbittorrent_url", ""),
+            username=app_settings.get("qbittorrent_username", ""),
+            password=app_settings.get("qbittorrent_password", "")
         )
         await qbit.delete_download(item.download_id, delete_files=True)
+        log.info("Cancelled qBittorrent download hash=%s.", item.download_id)
 
-    # Revert game status if needed
     if item.game_id:
         g_res = await db.execute(select(Game).where(Game.id == item.game_id))
         game = g_res.scalars().first()
@@ -69,4 +74,5 @@ async def cancel_queue_item(queue_id: int, db: AsyncSession = Depends(get_db)):
 
     await db.delete(item)
     await db.commit()
+    log.info("Removed queue item id=%d.", queue_id)
     return {"message": "Queue item removed."}

@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from typing import List, Optional
-from pydantic import BaseModel
-from datetime import datetime
+import logging
 import re
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from typing import List, Optional
+from pydantic import BaseModel, field_validator
 
 from backend.app.core.database import get_db
+from backend.app.core.auth import require_api_key
 from backend.app.models.models import Game, DownloadQueueItem
 from backend.app.services.platforms import PLATFORMS
 from backend.app.services.settings_service import get_app_settings
@@ -14,7 +15,12 @@ from backend.app.services.prowlarr import ProwlarrClient
 from backend.app.services.qbit import QBitClient
 from backend.app.services.region_parser import parse_release_title
 
-router = APIRouter(prefix="/games", tags=["Games"])
+log = logging.getLogger("romarr.api.games")
+
+router = APIRouter(prefix="/games", tags=["Games"], dependencies=[Depends(require_api_key)])
+
+_SAFE_URL_RE = re.compile(r"^https://", re.IGNORECASE)
+
 
 class GameCreate(BaseModel):
     title: str
@@ -31,9 +37,49 @@ class GameCreate(BaseModel):
     preferred_region: Optional[str] = "USA"
     auto_search_on_add: Optional[bool] = True
 
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("title must not be empty.")
+        if len(v) > 255:
+            raise ValueError("title must be 255 characters or fewer.")
+        return v
+
+    @field_validator("summary")
+    @classmethod
+    def validate_summary(cls, v: Optional[str]) -> Optional[str]:
+        if v and len(v) > 5000:
+            raise ValueError("summary must be 5000 characters or fewer.")
+        return v
+
+    @field_validator("cover_url", "banner_url")
+    @classmethod
+    def validate_image_url(cls, v: Optional[str]) -> Optional[str]:
+        if v and not v.startswith("https://"):
+            raise ValueError("Image URLs must use HTTPS.")
+        return v
+
+    @field_validator("release_year")
+    @classmethod
+    def validate_year(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1950 <= v <= 2100):
+            raise ValueError("release_year must be between 1950 and 2100.")
+        return v
+
+    @field_validator("platform_id")
+    @classmethod
+    def validate_platform_id(cls, v: str) -> str:
+        if len(v) > 50:
+            raise ValueError("platform_id too long.")
+        return v.lower().strip()
+
+
 class GameUpdate(BaseModel):
     preferred_region: Optional[str] = None
     status: Optional[str] = None
+
 
 @router.get("")
 async def list_games(
@@ -52,7 +98,7 @@ async def list_games(
         stmt = stmt.where(Game.title.ilike(f"%{query}%"))
     if region:
         stmt = stmt.where(Game.preferred_region == region)
-    
+
     stmt = stmt.order_by(Game.title.asc())
     result = await db.execute(stmt)
     games = result.scalars().all()
@@ -80,6 +126,7 @@ async def list_games(
         }
         for g in games
     ]
+
 
 @router.post("")
 async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
@@ -114,16 +161,18 @@ async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
     db.add(game)
     await db.commit()
     await db.refresh(game)
+    log.info("Added game '%s' (platform=%s, id=%d).", game.title, game.platform_id, game.id)
 
-    # If auto search requested, perform search and grab highest ranked release
     if data.auto_search_on_add:
         app_settings = await get_app_settings(db)
         prowlarr = ProwlarrClient(
             base_url=app_settings.get("prowlarr_url", ""),
             api_key=app_settings.get("prowlarr_api_key", "")
         )
-        pref_regions = [game.preferred_region] + [r for r in app_settings.get("preferred_regions", []) if r != game.preferred_region]
-        
+        pref_regions = [game.preferred_region] + [
+            r for r in app_settings.get("preferred_regions", []) if r != game.preferred_region
+        ]
+
         releases = await prowlarr.search_releases(
             query=game.title,
             platform_id=game.platform_id,
@@ -133,7 +182,7 @@ async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
         if releases:
             best_release = releases[0]
             parsed = parse_release_title(best_release["title"])
-            
+
             queue_item = DownloadQueueItem(
                 game_id=game.id,
                 release_title=best_release["title"],
@@ -152,16 +201,17 @@ async def add_game(data: GameCreate, db: AsyncSession = Depends(get_db)):
             await db.commit()
             await db.refresh(game)
 
-            # Dispatch to real qBittorrent if available
             qbit = QBitClient(
                 base_url=app_settings.get("qbittorrent_url", ""),
                 username=app_settings.get("qbittorrent_username", ""),
                 password=app_settings.get("qbittorrent_password", "")
             )
-            if best_release.get("download_url"):
-                await qbit.add_download(best_release["download_url"])
+            dl_url = best_release.get("download_url", "")
+            if dl_url and not dl_url.startswith("magnet:?xt=urn:btih:mock"):
+                await qbit.add_download(dl_url)
 
     return {"message": "Game added successfully", "game_id": game.id}
+
 
 @router.get("/{game_id}")
 async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
@@ -191,6 +241,7 @@ async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
         "created_at": game.created_at,
     }
 
+
 @router.delete("/{game_id}")
 async def delete_game(game_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Game).where(Game.id == game_id))
@@ -200,4 +251,5 @@ async def delete_game(game_id: int, db: AsyncSession = Depends(get_db)):
 
     await db.delete(game)
     await db.commit()
+    log.info("Deleted game '%s' (id=%d).", game.title, game_id)
     return {"message": f"Game '{game.title}' removed from library."}

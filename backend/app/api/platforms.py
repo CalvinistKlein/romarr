@@ -1,13 +1,17 @@
+import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import List
 
 from backend.app.core.database import get_db
+from backend.app.core.auth import require_api_key
 from backend.app.models.models import Game
 from backend.app.services.platforms import PLATFORMS
 
-router = APIRouter(prefix="/platforms", tags=["Platforms"])
+log = logging.getLogger("romarr.api.platforms")
+
+router = APIRouter(prefix="/platforms", tags=["Platforms"], dependencies=[Depends(require_api_key)])
+
 
 @router.get("")
 async def list_platforms(db: AsyncSession = Depends(get_db)):

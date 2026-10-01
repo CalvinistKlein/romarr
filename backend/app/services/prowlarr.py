@@ -3,12 +3,18 @@ Prowlarr & Torznab Integration Service.
 Queries indexers for ROM/ISO releases, integrates region parsing, and calculates relevance scores.
 """
 
-import httpx
-import xmltodict
+import logging
 import urllib.parse
 from typing import List, Dict, Any, Optional
+
+import httpx
+import xmltodict
+
 from backend.app.services.platforms import PLATFORMS
 from backend.app.services.region_parser import parse_release_title, score_and_sort_releases
+
+log = logging.getLogger("romarr.prowlarr")
+
 
 class ProwlarrClient:
     def __init__(self, base_url: str = "http://localhost:9696", api_key: str = ""):
@@ -33,9 +39,10 @@ class ProwlarrClient:
                         "version": data.get("version", "Unknown"),
                         "message": f"Successfully connected to Prowlarr v{data.get('version', '')}"
                     }
-                return {"success": False, "message": f"Prowlarr returned HTTP {res.status_code}: {res.text[:100]}"}
-            except Exception as e:
-                return {"success": False, "message": f"Connection failed: {str(e)}"}
+                return {"success": False, "message": f"Prowlarr returned HTTP {res.status_code}"}
+            except Exception as exc:
+                log.warning("Prowlarr connection test failed: %s", exc)
+                return {"success": False, "message": f"Connection failed: {exc}"}
 
     async def search_releases(
         self,
@@ -45,22 +52,19 @@ class ProwlarrClient:
         region_filter: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Search Prowlarr indexers for a game title and platform."""
-        raw_releases = []
+        raw_releases: List[Dict[str, Any]] = []
 
-        # Determine categories
-        categories = [1000] # Default Console
+        categories = [1000]
         preferred_format = None
         if platform_id and platform_id in PLATFORMS:
             p_info = PLATFORMS[platform_id]
             categories = p_info.torznab_categories
             preferred_format = p_info.preferred_format
 
-        # Build clean search queries (e.g. "Chrono Trigger SNES", "Metal Gear Solid PS1")
         search_query = query
         if platform_id and platform_id in PLATFORMS:
             search_query = f"{query} {PLATFORMS[platform_id].name.split()[0]}"
 
-        # Try real Prowlarr API if key provided
         if self.base_url and self.api_key:
             url = f"{self.base_url}/api/v1/search"
             params = {
@@ -87,15 +91,12 @@ class ProwlarrClient:
                                 "indexer": item.get("indexer", "Prowlarr"),
                                 "publish_date": item.get("publishDate")
                             })
-                except Exception as e:
-                    print(f"[Prowlarr] Search error: {e}")
+                except Exception as exc:
+                    log.error("Prowlarr search error: %s", exc)
 
-        # If no releases found or Prowlarr not connected, generate mock realistic releases across regions
-        # so the user can test the UI, region sorting, and download flow immediately
         if not raw_releases:
             raw_releases = self._generate_realistic_releases(query, platform_id)
 
-        # Apply region scoring and filtering
         return score_and_sort_releases(
             releases=raw_releases,
             preferred_regions=preferred_regions or ["USA", "EUR", "JPN", "WORLD", "TRANSLATION"],
@@ -104,29 +105,28 @@ class ProwlarrClient:
         )
 
     def _generate_realistic_releases(self, title: str, platform_id: Optional[str]) -> List[Dict[str, Any]]:
-        """Generate realistic sample ROM/ISO releases with various regions and formats."""
+        """Generate realistic sample ROM/ISO releases for demo / offline use."""
         p_id = platform_id or "snes"
         p_info = PLATFORMS.get(p_id)
         fmt = p_info.preferred_format if p_info else ".zip"
-        
-        # Determine sample sizes based on console
+
         if p_id in ["ps2", "gamecube", "wii", "xbox"]:
-            sizes = [1450000000, 2100000000, 3800000000] # ~1.4GB - 3.8GB
+            sizes = [1450000000, 2100000000, 3800000000]
         elif p_id in ["psx", "saturn", "dreamcast", "segacd"]:
-            sizes = [450000000, 580000000, 620000000] # ~450MB - 620MB
+            sizes = [450000000, 580000000, 620000000]
         elif p_id in ["nds", "n64", "gba"]:
-            sizes = [16000000, 32000000, 64000000] # ~16MB - 64MB
+            sizes = [16000000, 32000000, 64000000]
         else:
-            sizes = [2000000, 4000000, 8000000] # ~2MB - 8MB
+            sizes = [2000000, 4000000, 8000000]
 
         sample_templates = [
-            {"region": "USA", "title_suffix": f"(USA) (En,Fr,Es) {fmt}", "seeders": 42, "leechers": 3, "indexer": "GazelleGames", "size": sizes[0]},
-            {"region": "USA", "title_suffix": f"(USA) (Rev 1) {fmt}", "seeders": 28, "leechers": 1, "indexer": "TorrentLeech", "size": sizes[0]},
-            {"region": "EUR", "title_suffix": f"(Europe) (En,Fr,De,Es,It) {fmt}", "seeders": 19, "leechers": 2, "indexer": "1337x", "size": sizes[1] if len(sizes) > 1 else sizes[0]},
-            {"region": "JPN", "title_suffix": f"(Japan) (NTSC-J) {fmt}", "seeders": 14, "leechers": 0, "indexer": "Nyaa", "size": sizes[0]},
-            {"region": "TRANSLATION", "title_suffix": f"(Japan) [T-En by Aeon Genesis v1.0] {fmt}", "seeders": 35, "leechers": 2, "indexer": "RetroTorrents", "size": sizes[0]},
-            {"region": "WORLD", "title_suffix": f"(World) (Multi-5) {fmt}", "seeders": 12, "leechers": 1, "indexer": "BitSearch", "size": sizes[2] if len(sizes) > 2 else sizes[0]},
-            {"region": "USA", "title_suffix": f"(USA) (ISO / CHD Pack)", "seeders": 9, "leechers": 1, "indexer": "Archive.org", "size": sizes[0]},
+            {"title_suffix": f"(USA) (En,Fr,Es) {fmt}", "seeders": 42, "leechers": 3, "indexer": "GazelleGames", "size": sizes[0]},
+            {"title_suffix": f"(USA) (Rev 1) {fmt}", "seeders": 28, "leechers": 1, "indexer": "TorrentLeech", "size": sizes[0]},
+            {"title_suffix": f"(Europe) (En,Fr,De,Es,It) {fmt}", "seeders": 19, "leechers": 2, "indexer": "1337x", "size": sizes[1] if len(sizes) > 1 else sizes[0]},
+            {"title_suffix": f"(Japan) (NTSC-J) {fmt}", "seeders": 14, "leechers": 0, "indexer": "Nyaa", "size": sizes[0]},
+            {"title_suffix": f"(Japan) [T-En by Aeon Genesis v1.0] {fmt}", "seeders": 35, "leechers": 2, "indexer": "RetroTorrents", "size": sizes[0]},
+            {"title_suffix": f"(World) (Multi-5) {fmt}", "seeders": 12, "leechers": 1, "indexer": "BitSearch", "size": sizes[2] if len(sizes) > 2 else sizes[0]},
+            {"title_suffix": f"(USA) (ISO / CHD Pack)", "seeders": 9, "leechers": 1, "indexer": "Archive.org", "size": sizes[0]},
         ]
 
         results = []

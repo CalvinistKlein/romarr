@@ -4,6 +4,7 @@ Polls download clients (qBittorrent / simulated tasks), updates queue states, an
 """
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,13 +15,15 @@ from backend.app.services.settings_service import get_app_settings
 from backend.app.services.qbit import QBitClient
 from backend.app.services.organizer import RomOrganizer
 
+log = logging.getLogger("romarr.scheduler")
+
+
 async def update_download_queue_task():
     """Periodic background worker to update download progress and trigger completion."""
     async with AsyncSessionLocal() as db:
         try:
-            settings = await get_app_settings(db)
-            
-            # Fetch active queue items
+            app_settings = await get_app_settings(db)
+
             result = await db.execute(
                 select(DownloadQueueItem).where(
                     DownloadQueueItem.status.in_(["queued", "downloading", "extracting"])
@@ -31,16 +34,16 @@ async def update_download_queue_task():
                 return
 
             qbit = QBitClient(
-                base_url=settings.get("qbittorrent_url", "http://localhost:8080"),
-                username=settings.get("qbittorrent_username", "admin"),
-                password=settings.get("qbittorrent_password", "adminadmin"),
-                category=settings.get("qbittorrent_category", "romarr")
+                base_url=app_settings.get("qbittorrent_url", "http://localhost:8080"),
+                username=app_settings.get("qbittorrent_username", "admin"),
+                password=app_settings.get("qbittorrent_password", "adminadmin"),
+                category=app_settings.get("qbittorrent_category", "romarr")
             )
 
             organizer = RomOrganizer(
-                roms_root_dir=settings.get("roms_root_dir", "/roms"),
-                os_structure=settings.get("os_structure", "batocera"),
-                auto_extract=settings.get("auto_extract_archives", True)
+                roms_root_dir=app_settings.get("roms_root_dir", "/roms"),
+                os_structure=app_settings.get("os_structure", "batocera"),
+                auto_extract=app_settings.get("auto_extract_archives", True)
             )
 
             for item in active_items:
@@ -48,13 +51,12 @@ async def update_download_queue_task():
                     # Simulate smooth progress for demonstration / offline use
                     item.status = "downloading"
                     item.progress = min(100.0, item.progress + 25.0)
-                    item.download_speed = 15 * 1024 * 1024 # 15 MB/s
+                    item.download_speed = 15 * 1024 * 1024  # 15 MB/s
                     item.eta_seconds = max(0, int((100.0 - item.progress) / 25 * 3))
 
                     if item.progress >= 100.0:
                         item.status = "completed"
                         item.completed_at = datetime.now(timezone.utc)
-                        # Trigger organizer
                         if item.game_id:
                             await organizer.organize_game_file(
                                 db=db,
@@ -63,7 +65,6 @@ async def update_download_queue_task():
                                 release_title=item.release_title
                             )
                 else:
-                    # Real qBittorrent check
                     torrents = await qbit.get_active_downloads()
                     matched = next((t for t in torrents if t.get("hash") == item.download_id), None)
                     if matched:
@@ -84,11 +85,14 @@ async def update_download_queue_task():
                                 )
 
             await db.commit()
-        except Exception as e:
-            print(f"[Scheduler] Error updating queue: {e}")
+
+        except Exception as exc:
+            log.error("Scheduler error updating queue: %s", exc, exc_info=True)
+
 
 async def start_scheduler_loop():
-    """Continuous async loop running every 5 seconds."""
+    """Continuous async loop running every 4 seconds."""
+    log.info("Queue scheduler started.")
     while True:
         await update_download_queue_task()
         await asyncio.sleep(4)
