@@ -12,7 +12,7 @@ from backend.app.core.config import settings
 from backend.app.core.logging_config import configure_logging
 from backend.app.core.database import init_db, AsyncSessionLocal
 from backend.app.core.seeder import seed_initial_data
-from backend.app.core.auth import _resolve_api_key
+from backend.app.core.auth import _resolve_api_key, auth_router
 from backend.app.services.scheduler import start_scheduler_loop
 
 from backend.app.api.games import router as games_router
@@ -76,6 +76,7 @@ app.add_middleware(
 )
 
 # Register API Routers
+app.include_router(auth_router, prefix=settings.API_PREFIX)
 app.include_router(games_router, prefix=settings.API_PREFIX)
 app.include_router(search_router, prefix=settings.API_PREFIX)
 app.include_router(releases_router, prefix=settings.API_PREFIX)

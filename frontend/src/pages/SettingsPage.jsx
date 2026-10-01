@@ -84,6 +84,7 @@ export default function SettingsPage() {
   const handleTestProwlarr = async () => {
     setProwlarrTest({ status: 'testing', message: 'Testing connection to Prowlarr...' });
     try {
+      await api.saveSettings(formData);
       const res = await api.testProwlarr();
       setProwlarrTest({ status: res.success ? 'success' : 'error', message: res.message });
     } catch (err) {
@@ -94,6 +95,7 @@ export default function SettingsPage() {
   const handleTestQbit = async () => {
     setQbitTest({ status: 'testing', message: 'Testing connection to qBittorrent...' });
     try {
+      await api.saveSettings(formData);
       const res = await api.testQBittorrent();
       setQbitTest({ status: res.success ? 'success' : 'error', message: res.message });
     } catch (err) {

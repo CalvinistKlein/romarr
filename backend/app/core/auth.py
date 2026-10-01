@@ -82,3 +82,12 @@ async def require_api_key(
             detail="Invalid or missing API key. Set the X-Api-Key header or ?api_key= query parameter.",
         )
     return key
+
+
+from fastapi import APIRouter
+auth_router = APIRouter(prefix="/auth", tags=["Auth"])
+
+@auth_router.get("/key")
+async def get_client_api_key():
+    """Returns the active API key so the Web UI can authenticate automatically."""
+    return {"api_key": _resolve_api_key()}
