@@ -246,4 +246,17 @@ export const api = {
     const q = key ? `?api_key=${encodeURIComponent(key)}` : '';
     return `${API_BASE}/games/${gameId}/download${q}`;
   },
+
+  downloadRom: async (gameId) => {
+    await ensureApiKey();
+    const key = getApiKey();
+    const q = key ? `?api_key=${encodeURIComponent(key)}` : '';
+    const url = `${API_BASE}/games/${gameId}/download${q}`;
+
+    const link = document.createElement('a');
+    link.href = url;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  },
 };

@@ -1,8 +1,23 @@
-import React from 'react';
-import { Search, Trash2, Check, Clock, Download } from 'lucide-react';
+import React, { useState } from 'react';
+import { Search, Trash2, Check, Clock, Download, RefreshCw } from 'lucide-react';
 import { api } from '../services/api';
 
 export default function GameCard({ game, onOpenReleases, onDelete }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDownloading(true);
+    try {
+      await api.downloadRom(game.id);
+    } catch (err) {
+      alert(`Download error: ${err.message}`);
+    } finally {
+      setTimeout(() => setDownloading(false), 2000);
+    }
+  };
+
   const getStatusTag = (status) => {
     switch (status) {
       case 'downloaded':
@@ -84,15 +99,25 @@ export default function GameCard({ game, onOpenReleases, onDelete }) {
         {/* Flat Action Buttons */}
         <div className="mt-2.5 pt-2 border-t border-[#2d3238] space-y-1.5">
           {game.status === 'downloaded' && (
-            <a
-              href={api.getGameDownloadUrl(game.id)}
-              download
-              className="w-full bg-[#3c763d] hover:bg-[#2b542c] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#2b542c] no-underline"
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloading}
+              className="w-full bg-[#3c763d] hover:bg-[#2b542c] text-white py-1 text-[11px] font-bold flex items-center justify-center gap-1 border border-[#2b542c]"
               title="Download ROM file to this device"
             >
-              <Download className="w-3 h-3" />
-              <span>Download ROM</span>
-            </a>
+              {downloading ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>Starting Download…</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3 h-3" />
+                  <span>Download ROM</span>
+                </>
+              )}
+            </button>
           )}
           <div className="grid grid-cols-2 gap-1.5">
             <button
